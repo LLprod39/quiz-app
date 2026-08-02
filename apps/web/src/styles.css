@@ -357,6 +357,12 @@ select option { background: var(--panel); }
 .broadcast-dot { width: 7px; height: 7px; border-radius: 50%; background: #fb7185; box-shadow: 0 0 0 5px rgba(251,113,133,.1); animation: pulse 1.5s infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 0 9px rgba(251,113,133,0); } }
 .control-question, .lobby-control { padding: 25px; }
+.final-control-card { display: grid; grid-template-columns: 70px 1fr auto; align-items: center; gap: 22px; padding: 28px; background: radial-gradient(circle at 0 50%, rgba(var(--accent-rgb), .15), transparent 34%), color-mix(in srgb, var(--panel) 90%, transparent); }
+.final-control-icon { display: grid; width: 70px; height: 70px; place-items: center; border-radius: 22px; background: rgba(var(--accent-rgb), .12); color: var(--accent); }
+.final-control-icon svg { width: 32px; height: 32px; }
+.final-control-card h3 { margin: 11px 0 6px; font-family: 'Unbounded'; font-size: 21px; }
+.final-control-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.final-control-card .button { min-width: 190px; }
 .question-control-top { display: flex; align-items: center; justify-content: space-between; }
 .control-question h3 { margin: 17px 0; font-size: 24px; line-height: 1.35; }
 .timer { position: relative; display: flex; width: 55px; height: 55px; align-items: baseline; justify-content: center; border-radius: 50%; background: conic-gradient(var(--accent) var(--timer-progress), rgba(255,255,255,.06) 0); padding-top: 15px; font-family: 'Unbounded'; }
@@ -753,6 +759,9 @@ select option { background: var(--panel); }
   .lobby-control strong { font-size: 24px; }
   .lobby-control .button { grid-column: 1 / -1; }
   .secondary-controls { grid-template-columns: 1fr; }
+  .final-control-card { grid-template-columns: 58px 1fr; padding: 22px; }
+  .final-control-icon { width: 58px; height: 58px; border-radius: 18px; }
+  .final-control-card .button { width: 100%; grid-column: 1 / -1; }
   .control-options { grid-template-columns: 1fr; }
   .table-row { grid-template-columns: 45px 1fr 55px 75px; padding: 0 12px; font-size: 9px; }
   .submission-list > div { grid-template-columns: 22px 1fr 60px; }

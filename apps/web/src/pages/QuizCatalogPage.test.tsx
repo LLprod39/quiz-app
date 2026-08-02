@@ -12,7 +12,7 @@ const pack: QuizPack = {
   estimated_minutes: 35, difficulty: 'Средняя', round_title: 'Marvel',
   disclaimer: 'Фанатский образовательный квиз.', theme: { ...DEFAULT_BRANDING, brand_name: 'Marvel Quiz Battle', logo_mark: 'MV', accent: '#ef4444' },
   sources: [{ name: 'Wikidata', url: 'https://www.wikidata.org/', license: 'CC0 1.0', license_url: 'https://creativecommons.org/publicdomain/zero/1.0/' }],
-  question_count: 20, sample_questions: ['Как называется молот Тора?', 'Как зовут Человека-паука?'],
+  question_count: 20, sample_questions: ['Как называется молот Тора?', 'Как зовут Человека-паука?'], is_custom: false,
 }
 
 afterEach(() => { vi.restoreAllMocks(); history.replaceState({}, '', '/') })

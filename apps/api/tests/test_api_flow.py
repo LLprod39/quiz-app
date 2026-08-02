@@ -263,6 +263,91 @@ def test_quiz_pack_catalog_and_install():
         database.unlink()
 
 
+def test_custom_quiz_pack_prompt_crud_and_install():
+    database = Path("test_api_flow.db")
+    engine.dispose()
+    if database.exists():
+        database.unlink()
+    with TestClient(app) as client:
+        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        seeded_event = client.get("/api/events", headers=headers).json()[0]
+
+        prompt = client.post(
+            "/api/quiz-packs/gpt-prompt",
+            headers=headers,
+            json={"topic": "Страны мира", "question_count": 20, "difficulty": "Средняя"},
+        )
+        assert prompt.status_code == 200
+        assert "ровно 20" in prompt.json()["prompt"]
+        assert "только один валидный JSON" in prompt.json()["prompt"]
+        assert "Страны мира" in prompt.json()["prompt"]
+
+        source_url = "https://www.un.org/en/about-us/member-states"
+        pack = {
+            "schema_version": 1,
+            "slug": "countries-world",
+            "title": "Страны мира",
+            "topic": "Страны и география",
+            "icon": "🌍",
+            "short_description": "Три проверочных вопроса о странах мира.",
+            "description": "Готовый географический квиз о государствах, столицах и международных организациях.",
+            "estimated_minutes": 10,
+            "difficulty": "Средняя",
+            "game_mode": "team",
+            "round_title": "Вокруг света",
+            "disclaimer": "Факты проверены по официальным открытым источникам.",
+            "sources": [{
+                "name": "United Nations",
+                "url": "https://www.un.org/",
+                "license": "UN Terms of Use",
+                "license_url": "https://www.un.org/en/about-us/terms-of-use",
+            }],
+            "theme": {**seeded_event["theme"], "brand_name": "Страны мира", "logo_mark": "🌍", "theme_preset": "countries-world"},
+            "questions": [
+                {"text": "Какая страна входит в ООН?", "correct_answer": "Канада", "wrong_answers": ["Атлантида", "Нарния", "Ваканда"], "explanation": "Канада является государством — членом ООН.", "source_urls": [source_url], "time_limit_seconds": 25},
+                {"text": "Какая страна расположена в Южной Америке?", "correct_answer": "Бразилия", "wrong_answers": ["Норвегия", "Япония", "Египет"], "explanation": "Бразилия находится в Южной Америке.", "source_urls": [source_url], "time_limit_seconds": 30},
+                {"text": "Столицей какой страны является Оттава?", "correct_answer": "Канада", "wrong_answers": ["Австралия", "Ирландия", "Австрия"], "explanation": "Оттава является столицей Канады.", "source_urls": [source_url], "time_limit_seconds": 35},
+            ],
+        }
+        imported = client.post("/api/quiz-packs/import", headers=headers, json=pack)
+        assert imported.status_code == 200
+        assert imported.json()["is_custom"] is True
+        assert imported.json()["question_count"] == 3
+        assert any(item["slug"] == "countries-world" and item["is_custom"] for item in client.get("/api/quiz-packs").json())
+
+        definition = client.get("/api/quiz-packs/countries-world/definition", headers=headers)
+        assert definition.status_code == 200
+        assert definition.json()["questions"][0]["correct_answer"] == "Канада"
+
+        pack["title"] = "Страны мира — обновлено"
+        updated = client.put("/api/quiz-packs/countries-world/definition", headers=headers, json=pack)
+        assert updated.status_code == 200
+        assert updated.json()["title"] == "Страны мира — обновлено"
+
+        installed = client.post("/api/quiz-packs/countries-world/install", headers=headers, json={"replace_active": False})
+        assert installed.status_code == 200
+        installed_event = installed.json()
+        assert installed_event["title"] == "Страны мира — обновлено"
+        assert installed_event["question_count"] == 3
+        assert installed_event["rounds"][0]["questions"][0]["time_limit_seconds"] == 25
+
+        deleted = client.delete("/api/quiz-packs/countries-world", headers=headers)
+        assert deleted.status_code == 200
+        assert all(item["slug"] != "countries-world" for item in client.get("/api/quiz-packs").json())
+        assert client.get(f"/api/events/{installed_event['id']}", headers=headers).status_code == 200
+        assert client.delete("/api/quiz-packs/marvel-universe", headers=headers).status_code == 400
+
+        pack["slug"] = "countries-invalid"
+        pack["questions"][0]["wrong_answers"][0] = pack["questions"][0]["correct_answer"]
+        invalid = client.post("/api/quiz-packs/import", headers=headers, json=pack)
+        assert invalid.status_code == 422
+
+    engine.dispose()
+    if database.exists():
+        database.unlink()
+
+
 def test_public_branding_follows_active_event():
     database = Path("test_api_flow.db")
     engine.dispose()

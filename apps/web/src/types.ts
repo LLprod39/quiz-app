@@ -24,10 +24,11 @@ export interface QuizPackSource { name: string; url: string; license: string; li
 export interface QuizPack {
   slug: string; title: string; topic: string; icon: string
   short_description: string; description: string; estimated_minutes: number
-  difficulty: string; round_title: string; disclaimer: string
+  difficulty: string; game_mode?: 'individual' | 'team'; round_title: string; disclaimer: string
   sources: QuizPackSource[]; theme: ThemeConfig
-  question_count: number; sample_questions: string[]
+  question_count: number; sample_questions: string[]; is_custom: boolean
 }
+export type QuizPackDefinition = Record<string, unknown>
 export interface EventData {
   id: string; title: string; event_format: 'celebration' | 'battle'; topic: string
   hero_name: string; event_date: string; status: string; is_selected: boolean

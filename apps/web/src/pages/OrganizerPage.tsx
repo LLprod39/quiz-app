@@ -168,13 +168,31 @@ function MyQuizzesPanel({ events, current, onSelect, onCreate, onChanged }: { ev
   return <div className="content-stack my-quizzes-panel"><section className="page-heading"><div><Badge tone="accent"><Library size={14} /> Постоянная библиотека</Badge><h2>Мои квизы</h2><p>Настройки и вопросы каждого квиза сохраняются. Открывайте любой из них и создавайте новую игровую комнату столько раз, сколько нужно.</p></div><div className="quiz-library-actions"><Button variant="secondary" onClick={() => onSelect(current.id)} disabled><Check size={17} /> Выбран: {current.title}</Button><Button onClick={onCreate}><Plus size={18} /> Новый квиз</Button></div></section>{error && <p className="form-error">{error}</p>}<section className="saved-quiz-grid">{saved.map(item => <Card key={item.id} className={`saved-quiz-card ${item.id === current.id ? 'selected' : ''}`} style={themeStyle(item.theme)}><div className="saved-quiz-head"><span className="saved-quiz-mark">{item.theme.logo_mark || (item.topic || item.hero_name || item.title).slice(0, 2)}</span><div>{item.id === current.id && <Badge tone="success"><Check size={12} /> Выбран</Badge>}<Badge tone="neutral">{item.event_format === 'battle' ? 'Квиз-баттл' : 'Праздник'}</Badge></div></div><span className="quiz-pack-topic">{item.event_format === 'battle' ? item.topic : `О ${item.hero_name}`}</span><h3>{item.title}</h3><div className="saved-quiz-stats"><span><CircleHelp /> <b>{item.question_count}</b><small>вопросов</small></span><span><Play /> <b>{item.sessions.length}</b><small>игр</small></span><span><Users /> <b>{item.sessions.reduce((sum, game) => sum + game.participant_count, 0)}</b><small>участников</small></span></div>{item.sessions.length > 0 && <p className="saved-quiz-last">Последняя комната: <b>{item.sessions[0].join_code}</b> · {item.sessions[0].status === 'finished' ? 'завершена' : 'в процессе'}</p>}<div className="saved-quiz-actions"><Button onClick={() => void choose(item.id)} disabled={Boolean(busy) || item.id === current.id}>{busy === item.id ? <LoaderCircle className="spin" /> : item.id === current.id ? <Check /> : <ChevronRight />} {item.id === current.id ? 'Открыт' : 'Выбрать'}</Button><button className="icon-button danger-icon" title="Перенести в архив" onClick={() => void archive(item)} disabled={Boolean(busy)}><Archive size={17} /></button></div></Card>)}</section>{archived.length > 0 && <section className="quiz-archive"><div className="section-title"><div><span className="overline">Можно восстановить</span><h3>Архив</h3></div><Badge>{archived.length}</Badge></div>{archived.map(item => <Card key={item.id}><span className="saved-quiz-mark muted">{item.theme.logo_mark || 'Q'}</span><div><b>{item.title}</b><small>{item.question_count} вопросов · {item.sessions.length} игр</small></div><Button variant="secondary" onClick={() => void restore(item)} disabled={Boolean(busy)}>{busy === item.id ? <LoaderCircle className="spin" /> : <RotateCcw />} Восстановить</Button></Card>)}</section>}</div>
 }
 
-function PackCatalogPanel({ onInstalled }: { onInstalled: () => Promise<void> | void }) {
+export function PackCatalogPanel({ onInstalled }: { onInstalled: () => Promise<void> | void }) {
   const { refreshBranding } = useBranding()
   const [packs, setPacks] = useState<QuizPack[]>([])
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState('')
   const [error, setError] = useState('')
-  useEffect(() => { api.quizPacks().then(setPacks).catch(err => setError(err instanceof Error ? err.message : 'Не удалось открыть каталог')).finally(() => setLoading(false)) }, [])
+  const [builderOpen, setBuilderOpen] = useState(false)
+  const [builderStep, setBuilderStep] = useState<'setup' | 'prompt' | 'json'>('setup')
+  const [topic, setTopic] = useState('')
+  const [questionCount, setQuestionCount] = useState(20)
+  const [difficulty, setDifficulty] = useState('Средняя')
+  const [prompt, setPrompt] = useState(() => localStorage.getItem('quiz_pack_gpt_prompt') || '')
+  const [jsonText, setJsonText] = useState(() => localStorage.getItem('quiz_pack_json_draft') || '')
+  const [editingSlug, setEditingSlug] = useState('')
+  const [builderBusy, setBuilderBusy] = useState(false)
+  const [builderError, setBuilderError] = useState('')
+  const [copied, setCopied] = useState(false)
+  const [notice, setNotice] = useState('')
+  const loadPacks = async () => {
+    setLoading(true)
+    try { setPacks(await api.quizPacks()) }
+    catch (err) { setError(err instanceof Error ? err.message : 'Не удалось открыть каталог') }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { void loadPacks() }, [])
   const install = async (pack: QuizPack) => {
     const confirmed = window.confirm(`Добавить «${pack.title}» в мои квизы? Уже сохранённые квизы останутся в библиотеке.`)
     if (!confirmed) return
@@ -187,7 +205,64 @@ function PackCatalogPanel({ onInstalled }: { onInstalled: () => Promise<void> | 
       setError(err instanceof Error ? err.message : 'Не удалось создать тематический квиз')
     } finally { setInstalling('') }
   }
-  return <div className="content-stack quiz-library-panel"><section className="page-heading"><div><Badge tone="accent"><BookOpenText size={14} /> Каталог шаблонов</Badge><h2>Добавьте ещё один готовый квиз</h2><p>Шаблон станет новым самостоятельным квизом. Все текущие квизы, их настройки и история игр останутся без изменений.</p></div><Link className="button button-secondary" to="/quizzes" target="_blank">Открыть публичный каталог <ExternalLink size={16} /></Link></section>{error && <p className="form-error">{error}</p>}{loading ? <div className="center-panel"><LoaderCircle className="spin" /></div> : <section className="quiz-pack-grid">{packs.map(pack => <QuizPackCard key={pack.slug} pack={pack} action={<Button onClick={() => void install(pack)} disabled={Boolean(installing)}>{installing === pack.slug ? <LoaderCircle className="spin" /> : <Plus size={16} />} Добавить</Button>} />)}</section>}</div>
+  const startBuilder = () => {
+    setEditingSlug(''); setBuilderStep('setup'); setBuilderError(''); setNotice(''); setBuilderOpen(true)
+  }
+  const generatePrompt = async () => {
+    if (!topic.trim()) { setBuilderError('Укажите тему будущего квиза'); return }
+    setBuilderBusy(true); setBuilderError('')
+    try {
+      const result = await api.quizPackPrompt({ topic: topic.trim(), question_count: questionCount, difficulty })
+      setPrompt(result.prompt); localStorage.setItem('quiz_pack_gpt_prompt', result.prompt); setBuilderStep('prompt')
+    } catch (err) { setBuilderError(err instanceof Error ? err.message : 'Не удалось создать промпт') }
+    finally { setBuilderBusy(false) }
+  }
+  const copyPrompt = async () => {
+    await navigator.clipboard.writeText(prompt); setCopied(true); window.setTimeout(() => setCopied(false), 1800)
+  }
+  const openJsonStep = () => { setBuilderError(''); setBuilderStep('json') }
+  const changeJson = (value: string) => { setJsonText(value); localStorage.setItem('quiz_pack_json_draft', value) }
+  const saveTemplate = async () => {
+    setBuilderBusy(true); setBuilderError('')
+    try {
+      const cleanJson = jsonText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+      const parsed = JSON.parse(cleanJson)
+      if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') throw new Error('Нужен один JSON-объект, а не массив')
+      const saved = editingSlug ? await api.updateQuizPackDefinition(editingSlug, parsed) : await api.importQuizPack(parsed)
+      localStorage.removeItem('quiz_pack_json_draft'); setJsonText(''); setBuilderOpen(false); setEditingSlug('')
+      setNotice(`Шаблон «${saved.title}» сохранён в каталоге`); await loadPacks()
+    } catch (err) {
+      setBuilderError(err instanceof SyntaxError ? `JSON содержит ошибку: ${err.message}` : err instanceof Error ? err.message : 'Не удалось сохранить шаблон')
+    } finally { setBuilderBusy(false) }
+  }
+  const editTemplate = async (pack: QuizPack) => {
+    setBuilderBusy(true); setBuilderError(''); setNotice('')
+    try {
+      const definition = await api.quizPackDefinition(pack.slug)
+      setJsonText(JSON.stringify(definition, null, 2)); setEditingSlug(pack.slug); setBuilderStep('json'); setBuilderOpen(true)
+    } catch (err) { setError(err instanceof Error ? err.message : 'Не удалось открыть шаблон') }
+    finally { setBuilderBusy(false) }
+  }
+  const deleteTemplate = async (pack: QuizPack) => {
+    if (!window.confirm(`Удалить шаблон «${pack.title}» из каталога? Уже созданные из него квизы останутся без изменений.`)) return
+    setInstalling(pack.slug); setError('')
+    try { await api.deleteQuizPack(pack.slug); setNotice(`Шаблон «${pack.title}» удалён`); await loadPacks() }
+    catch (err) { setError(err instanceof Error ? err.message : 'Не удалось удалить шаблон') }
+    finally { setInstalling('') }
+  }
+  return <div className="content-stack quiz-library-panel">
+    <section className="page-heading"><div><Badge tone="accent"><BookOpenText size={14} /> Каталог шаблонов</Badge><h2>Добавьте ещё один готовый квиз</h2><p>Создайте тему с помощью GPT или выберите готовый набор. Сохранённый шаблон останется в каталоге, пока вы сами его не измените или не удалите.</p></div><div className="catalog-heading-actions"><Button onClick={startBuilder}><Sparkles size={17} /> Создать шаблон с GPT</Button><Link className="button button-secondary" to="/quizzes" target="_blank">Публичный каталог <ExternalLink size={16} /></Link></div></section>
+    {notice && <div className="success-banner"><Check size={18} /> {notice}<button onClick={() => setNotice('')}>×</button></div>}
+    {error && <p className="form-error">{error}</p>}
+    {builderOpen && <Card className="template-builder"><div className="template-builder-head"><div><Badge tone={editingSlug ? 'warning' : 'accent'}>{editingSlug ? 'Редактирование' : 'GPT → JSON → каталог'}</Badge><h3>{editingSlug ? 'Измените JSON шаблона' : 'Создание нового шаблона'}</h3><p>{editingSlug ? 'После сохранения карточка и будущие квизы будут использовать обновлённую версию.' : 'Мы подготовим точный промпт. GPT проведёт исследование, а платформа проверит и сохранит результат.'}</p></div><button className="icon-button" aria-label="Закрыть конструктор" onClick={() => setBuilderOpen(false)}>×</button></div>
+      {!editingSlug && <div className="template-steps"><span className={builderStep === 'setup' ? 'active' : ''}><i>1</i> Тема</span><span className={builderStep === 'prompt' ? 'active' : ''}><i>2</i> Промпт</span><span className={builderStep === 'json' ? 'active' : ''}><i>3</i> JSON</span></div>}
+      {builderStep === 'setup' && <div className="template-setup"><div className="form-grid three"><Field label="Тема квиза"><input value={topic} onChange={event => setTopic(event.target.value)} placeholder="Например: Страны мира" /></Field><Field label="Количество вопросов"><input type="number" min="3" max="50" value={questionCount} onChange={event => setQuestionCount(Math.max(3, Math.min(50, Number(event.target.value))))} /></Field><Field label="Сложность"><select value={difficulty} onChange={event => setDifficulty(event.target.value)}><option>Лёгкая</option><option>Средняя</option><option>Сложная</option></select></Field></div><div className="template-research-note"><Sparkles /><span><b>Промпт потребует исследование</b><small>GPT должен проверить каждый факт, приложить прямые ссылки и вернуть только строгий JSON — без Python и Markdown.</small></span></div><div className="template-setup-actions"><Button onClick={() => void generatePrompt()} disabled={builderBusy || !topic.trim()}>{builderBusy ? <LoaderCircle className="spin" /> : <Sparkles />} Создать промпт</Button>{prompt && <Button variant="secondary" onClick={() => setBuilderStep('prompt')}><History /> Открыть последний промпт</Button>}</div></div>}
+      {builderStep === 'prompt' && <div className="template-prompt-step"><div className="template-step-title"><div><span className="overline">Шаг 2</span><h4>Скопируйте промпт в GPT</h4><p>В GPT включите веб-поиск, вставьте текст и дождитесь полного JSON.</p></div><div className="template-prompt-actions"><Button variant="secondary" onClick={() => void copyPrompt()}>{copied ? <Check /> : <Copy />} {copied ? 'Скопировано' : 'Копировать'}</Button><a className="button button-secondary" href="https://chatgpt.com/" target="_blank" rel="noreferrer">Открыть GPT <ExternalLink /></a></div></div><textarea className="prompt-output" readOnly value={prompt} rows={14} /><div className="template-builder-actions"><Button variant="secondary" onClick={() => setBuilderStep('setup')}><ArrowLeft /> Изменить тему</Button><Button onClick={openJsonStep}>У меня есть JSON <ArrowRight /></Button></div></div>}
+      {builderStep === 'json' && <div className="template-json-step"><div className="template-step-title"><div><span className="overline">{editingSlug ? 'JSON шаблона' : 'Шаг 3'}</span><h4>{editingSlug ? 'Проверьте и сохраните изменения' : 'Вставьте ответ GPT'}</h4><p>Подойдут только чистые данные от первой до последней фигурной скобки. Перед сохранением сервер проверит структуру, ответы и источники.</p></div>{!editingSlug && prompt && <Button variant="secondary" onClick={() => setBuilderStep('prompt')}><Copy /> Вернуться к промпту</Button>}</div><textarea className="json-import-area" value={jsonText} onChange={event => changeJson(event.target.value)} rows={20} spellCheck={false} placeholder={'{\n  "schema_version": 1,\n  "slug": "countries-world",\n  ...\n}'} />{builderError && <p className="form-error">{builderError}</p>}<div className="template-builder-actions"><small>Существующие квизы не изменятся — сохраняется только шаблон каталога.</small><Button onClick={() => void saveTemplate()} disabled={builderBusy || !jsonText.trim()}>{builderBusy ? <LoaderCircle className="spin" /> : <Save />} {editingSlug ? 'Сохранить изменения' : 'Проверить и сохранить'}</Button></div></div>}
+      {builderStep !== 'json' && builderError && <p className="form-error">{builderError}</p>}
+    </Card>}
+    {loading ? <div className="center-panel"><LoaderCircle className="spin" /></div> : <section className="quiz-pack-grid">{packs.map(pack => <QuizPackCard key={pack.slug} pack={pack} action={<div className="template-pack-actions"><Button onClick={() => void install(pack)} disabled={Boolean(installing)}>{installing === pack.slug ? <LoaderCircle className="spin" /> : <Plus size={16} />} Добавить</Button>{pack.is_custom && <><button className="icon-button" title="Редактировать шаблон" aria-label={`Редактировать ${pack.title}`} onClick={() => void editTemplate(pack)} disabled={Boolean(installing) || builderBusy}><Pencil size={16} /></button><button className="icon-button danger-icon" title="Удалить шаблон" aria-label={`Удалить ${pack.title}`} onClick={() => void deleteTemplate(pack)} disabled={Boolean(installing)}><Trash2 size={16} /></button></>}</div>} />)}</section>}
+  </div>
 }
 
 function SettingsPanel({ event, onChanged }: { event: EventData; onChanged: () => void }) {

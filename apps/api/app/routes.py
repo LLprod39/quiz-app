@@ -1,10 +1,12 @@
+import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, selectinload
 
@@ -13,7 +15,7 @@ from .db import get_db
 from .game import MAX_QUESTIONS, answer_target_count, auto_transition_deadline, bump_version, check_answer, generate_join_code, iso_utc, leaderboard, ordered_questions, recalculate_submissions, session_snapshot, utcnow
 from .models import (
     AnswerOption, AuditLog, DeviceTransfer, Event, GameSession, Participant, Question, Questionnaire,
-    QuestionnaireItem, QuestionnaireResponse, Round, Submission, Team, uid,
+    QuestionnaireItem, QuestionnaireResponse, QuizPackTemplate, Round, Submission, Team, uid,
 )
 from .realtime import hub
 from .quiz_packs import PACKS_BY_SLUG, QUIZ_PACKS, public_pack
@@ -99,6 +101,76 @@ class TvDisplayBody(BaseModel):
 
 class PackInstallBody(BaseModel):
     replace_active: bool = False
+
+
+class PackPromptBody(BaseModel):
+    topic: str = Field(min_length=2, max_length=120)
+    question_count: int = Field(default=20, ge=3, le=MAX_QUESTIONS)
+    difficulty: Literal["Лёгкая", "Средняя", "Сложная"] = "Средняя"
+
+
+class PackSourceBody(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    url: HttpUrl
+    license: str = Field(min_length=2, max_length=120)
+    license_url: HttpUrl
+
+
+class PackQuestionImportBody(BaseModel):
+    text: str = Field(min_length=5, max_length=500)
+    correct_answer: str = Field(min_length=1, max_length=300)
+    wrong_answers: list[str] = Field(min_length=3, max_length=3)
+    explanation: str = Field(min_length=5, max_length=1000)
+    source_urls: list[HttpUrl] = Field(min_length=1, max_length=5)
+    time_limit_seconds: int = Field(default=30, ge=10, le=120)
+
+    @model_validator(mode="after")
+    def validate_answers(self):
+        self.text = self.text.strip()
+        self.correct_answer = self.correct_answer.strip()
+        self.wrong_answers = [answer.strip() for answer in self.wrong_answers]
+        answers = [self.correct_answer, *self.wrong_answers]
+        if any(not answer for answer in answers):
+            raise ValueError("Все варианты ответа должны быть заполнены")
+        if len({answer.casefold() for answer in answers}) != 4:
+            raise ValueError("Правильный и три неверных ответа должны отличаться")
+        return self
+
+
+class QuizPackImportBody(BaseModel):
+    schema_version: Literal[1] = 1
+    slug: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", min_length=3, max_length=120)
+    title: str = Field(min_length=2, max_length=160)
+    topic: str = Field(min_length=2, max_length=160)
+    icon: str = Field(min_length=1, max_length=8)
+    short_description: str = Field(min_length=10, max_length=240)
+    description: str = Field(min_length=20, max_length=1000)
+    estimated_minutes: int = Field(ge=5, le=180)
+    difficulty: Literal["Лёгкая", "Средняя", "Сложная"]
+    game_mode: Literal["individual", "team"] = "team"
+    round_title: str = Field(min_length=2, max_length=120)
+    disclaimer: str = Field(min_length=5, max_length=500)
+    sources: list[PackSourceBody] = Field(min_length=1, max_length=12)
+    theme: ThemeBody
+    questions: list[PackQuestionImportBody] = Field(min_length=3, max_length=MAX_QUESTIONS)
+
+    @model_validator(mode="after")
+    def normalize_pack(self):
+        self.title = self.title.strip()
+        self.topic = self.topic.strip()
+        self.round_title = self.round_title.strip()
+        if len({question.text.casefold() for question in self.questions}) != len(self.questions):
+            raise ValueError("В шаблоне есть повторяющиеся вопросы")
+        colors = [self.theme.accent, self.theme.secondary, self.theme.background, self.theme.panel, self.theme.panel_2, self.theme.text, self.theme.muted]
+        if any(not re.fullmatch(r"#[0-9a-fA-F]{6}", color) for color in colors):
+            raise ValueError("Все цвета темы должны быть в формате HEX, например #22c55e")
+        declared_sources = {str(source.url).rstrip("/") for source in self.sources}
+        referenced_sources = {str(url).rstrip("/") for question in self.questions for url in question.source_urls}
+        if not referenced_sources:
+            raise ValueError("Добавьте источники к вопросам")
+        if not all(any(reference.startswith(source) or source.startswith(reference) for source in declared_sources) for reference in referenced_sources):
+            raise ValueError("Ссылки вопросов должны относиться к указанным источникам")
+        return self
 
 
 class QuestionBody(BaseModel):
@@ -307,6 +379,18 @@ def select_quiz(db: Session, event: Event) -> None:
     event.is_selected = True
 
 
+def quiz_pack_by_slug(db: Session, slug: str) -> tuple[dict | None, bool]:
+    built_in = PACKS_BY_SLUG.get(slug)
+    if built_in:
+        return built_in, False
+    template = db.scalar(select(QuizPackTemplate).where(QuizPackTemplate.slug == slug))
+    return (template.definition, True) if template else (None, False)
+
+
+def quiz_pack_definition(body: QuizPackImportBody) -> dict:
+    return body.model_dump(mode="json")
+
+
 @router.get("/health")
 def health(db: Session = Depends(get_db)):
     db.scalar(select(func.count()).select_from(Event))
@@ -328,39 +412,150 @@ def public_branding(db: Session = Depends(get_db)):
 
 
 @router.get("/quiz-packs")
-def list_quiz_packs():
-    return [public_pack(pack) for pack in QUIZ_PACKS]
+def list_quiz_packs(db: Session = Depends(get_db)):
+    custom = db.scalars(select(QuizPackTemplate).order_by(QuizPackTemplate.updated_at.desc())).all()
+    return [public_pack(pack) for pack in QUIZ_PACKS] + [public_pack(template.definition, is_custom=True) for template in custom]
+
+
+@router.post("/quiz-packs/gpt-prompt")
+def create_quiz_pack_prompt(body: PackPromptBody, _: str = Depends(require_admin)):
+    topic = body.topic.strip()
+    example = {
+        "schema_version": 1,
+        "slug": "short-english-slug",
+        "title": f"Квиз: {topic}",
+        "topic": topic,
+        "icon": "🌍",
+        "short_description": "Краткое описание квиза в одном предложении.",
+        "description": "Расширенное описание игры и того, какие знания она проверяет.",
+        "estimated_minutes": max(10, round(body.question_count * 1.7)),
+        "difficulty": body.difficulty,
+        "game_mode": "team",
+        "round_title": topic,
+        "disclaimer": "Факты проверены по перечисленным источникам; формулировки вопросов оригинальные.",
+        "sources": [{
+            "name": "Название надёжного источника",
+            "url": "https://example.org/",
+            "license": "Условия использования или лицензия",
+            "license_url": "https://example.org/terms",
+        }],
+        "theme": {
+            "accent": "#22c55e", "secondary": "#38bdf8", "background": "#07140e", "panel": "#10251a", "panel_2": "#173524",
+            "text": "#f4fff8", "muted": "#9bbbaa", "mode": "dark", "decor": "glow", "theme_preset": "custom-topic",
+            "brand_name": f"Квиз: {topic}", "brand_tagline": "знания · азарт · открытия", "logo_mark": "🌍",
+            "landing_eyebrow": "ГОТОВЫ ПРОВЕРИТЬ СЕБЯ?", "landing_title": f"Квиз: {topic}", "landing_highlight": "начинаем баттл",
+            "landing_description": "Описание тематической игры для главной страницы.", "organizer_link_label": "Панель ведущего",
+            "join_code_label": "Код игры", "join_button_label": "Войти в баттл", "trust_no_registration": "Вход по коду",
+            "trust_players": "Командная игра", "trust_offline": "Работает в локальной сети", "step_format": "Соберите команду",
+            "step_join": "Войдите по коду", "step_show": "Покажите знания",
+        },
+        "questions": [{
+            "text": "Оригинальная формулировка вопроса?",
+            "correct_answer": "Правильный ответ",
+            "wrong_answers": ["Неверный вариант 1", "Неверный вариант 2", "Неверный вариант 3"],
+            "explanation": "Короткое объяснение правильного ответа и проверяемого факта.",
+            "source_urls": ["https://example.org/direct-fact-page"],
+            "time_limit_seconds": 30,
+        }],
+    }
+    prompt = f"""Создай готовый квиз-баттл на русском языке по теме «{topic}».
+
+Требования:
+1. Используй веб-поиск и проверь каждый факт минимум по одному надёжному источнику. Предпочитай официальные сайты, международные организации, государственные и научные ресурсы, энциклопедии с редакционным контролем.
+2. Создай ровно {body.question_count} разных вопросов сложности «{body.difficulty}». Для каждого вопроса дай один правильный и ровно три правдоподобных неверных ответа.
+3. Формулировки вопросов и пояснений должны быть оригинальными. Не копируй готовые вопросы из коммерческих викторин.
+4. У каждого вопроса в source_urls должны быть прямые HTTPS-ссылки на страницы, подтверждающие именно этот факт. В sources перечисли все использованные сайты и реальные условия их использования или лицензии.
+5. Не используй спорные, быстро устаревающие или неоднозначные факты. Если факт зависит от даты, явно укажи дату в вопросе.
+6. Подбери уникальное оформление темы: читаемые контрастные HEX-цвета, короткие тексты и подходящий emoji.
+
+Верни только один валидный JSON-объект UTF-8. Никаких пояснений, Markdown-блоков, комментариев, Python, QUIZ_PACKS или вызовов _q. Все ключи и строки должны быть в двойных кавычках.
+
+Точная структура JSON (в массиве questions создай ровно {body.question_count} объектов по этому образцу):
+{json.dumps(example, ensure_ascii=False, indent=2)}
+"""
+    return {"prompt": prompt, "topic": topic, "question_count": body.question_count}
+
+
+@router.post("/quiz-packs/import")
+def import_quiz_pack(body: QuizPackImportBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    existing, _ = quiz_pack_by_slug(db, body.slug)
+    if existing:
+        raise HTTPException(409, "Шаблон с таким slug уже существует")
+    template = QuizPackTemplate(slug=body.slug, definition=quiz_pack_definition(body))
+    db.add(template)
+    db.add(AuditLog(action="quiz_pack.custom.created", after={"slug": body.slug, "question_count": len(body.questions)}))
+    db.commit()
+    return public_pack(template.definition, is_custom=True)
 
 
 @router.get("/quiz-packs/{slug}")
-def get_quiz_pack(slug: str):
-    pack = PACKS_BY_SLUG.get(slug)
+def get_quiz_pack(slug: str, db: Session = Depends(get_db)):
+    pack, is_custom = quiz_pack_by_slug(db, slug)
     if not pack:
         raise HTTPException(404, "Тематический квиз не найден")
-    return public_pack(pack)
+    return public_pack(pack, is_custom=is_custom)
+
+
+@router.get("/quiz-packs/{slug}/definition")
+def get_quiz_pack_definition(slug: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    template = db.scalar(select(QuizPackTemplate).where(QuizPackTemplate.slug == slug))
+    if not template:
+        raise HTTPException(404, "Пользовательский шаблон не найден")
+    return template.definition
+
+
+@router.put("/quiz-packs/{slug}/definition")
+def update_quiz_pack_definition(slug: str, body: QuizPackImportBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    template = db.scalar(select(QuizPackTemplate).where(QuizPackTemplate.slug == slug))
+    if not template:
+        raise HTTPException(404, "Пользовательский шаблон не найден")
+    if body.slug != slug:
+        collision, _ = quiz_pack_by_slug(db, body.slug)
+        if collision:
+            raise HTTPException(409, "Шаблон с новым slug уже существует")
+    before = {"slug": template.slug, "question_count": len(template.definition.get("questions", []))}
+    template.slug = body.slug
+    template.definition = quiz_pack_definition(body)
+    db.add(AuditLog(action="quiz_pack.custom.updated", before=before, after={"slug": body.slug, "question_count": len(body.questions)}))
+    db.commit()
+    return public_pack(template.definition, is_custom=True)
+
+
+@router.delete("/quiz-packs/{slug}")
+def delete_quiz_pack(slug: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    template = db.scalar(select(QuizPackTemplate).where(QuizPackTemplate.slug == slug))
+    if not template:
+        if slug in PACKS_BY_SLUG:
+            raise HTTPException(400, "Встроенные шаблоны нельзя удалить")
+        raise HTTPException(404, "Пользовательский шаблон не найден")
+    db.delete(template)
+    db.add(AuditLog(action="quiz_pack.custom.deleted", before={"slug": slug, "question_count": len(template.definition.get("questions", []))}))
+    db.commit()
+    return {"status": "deleted", "slug": slug}
 
 
 @router.post("/quiz-packs/{slug}/install")
 def install_quiz_pack(slug: str, body: PackInstallBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
-    pack = PACKS_BY_SLUG.get(slug)
+    pack, _ = quiz_pack_by_slug(db, slug)
     if not pack:
         raise HTTPException(404, "Тематический квиз не найден")
     event = Event(
         title=pack["title"], event_format="battle", topic=pack["topic"], hero_name="", event_date="",
-        status="draft", is_selected=True, game_mode="team", allow_late_join=True, hero_photo_url=None,
+        status="draft", is_selected=True, game_mode=pack.get("game_mode", "team"), allow_late_join=True, hero_photo_url=None,
         theme=ThemeBody(**pack["theme"]).model_dump(),
     )
     round_ = Round(title=pack["round_title"], sort_order=0)
     event.rounds.append(round_)
     for question_index, item in enumerate(pack["questions"]):
+        answers = item.get("answers") or [item["correct_answer"], *item["wrong_answers"]]
         correct_id = uid()
         question = Question(
-            type="single", text=item["text"], time_limit_seconds=30, correct_answer=correct_id,
+            type="single", text=item["text"], time_limit_seconds=item.get("time_limit_seconds", 30), correct_answer=correct_id,
             shuffle_options=True, explanation=item["explanation"], sort_order=question_index,
         )
         question.options = [
             AnswerOption(id=correct_id if answer_index == 0 else uid(), text=answer, is_correct=answer_index == 0, sort_order=answer_index)
-            for answer_index, answer in enumerate(item["answers"])
+            for answer_index, answer in enumerate(answers)
         ]
         round_.questions.append(question)
     db.add(event)

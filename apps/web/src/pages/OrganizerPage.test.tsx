@@ -2,9 +2,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_BRANDING } from '../lib/branding'
 import { api } from '../lib/api'
+import { MemoryRouter } from '../lib/router'
 import { useGameStore } from '../store/game'
 import type { EventData, Snapshot } from '../types'
-import { LivePanel } from './OrganizerPage'
+import { LivePanel, PackCatalogPanel } from './OrganizerPage'
 
 const event = {
   id: 'event-1', title: 'Тестовый квиз', event_format: 'battle', topic: 'Кино', hero_name: '', event_date: '', status: 'ready', is_selected: true,
@@ -29,6 +30,7 @@ function snapshot(status: Snapshot['session']['status']): Snapshot {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  localStorage.clear()
   useGameStore.setState({ snapshot: null, connection: 'offline', latency: null, socket: null })
 })
 
@@ -54,5 +56,32 @@ describe('LivePanel final flow', () => {
     fireEvent.click(screen.getByRole('button', { name: /показать финал/i }))
     await waitFor(() => expect(onResults).toHaveBeenCalledOnce())
     expect(api.action).toHaveBeenCalledWith('ABC123', 'next')
+  })
+})
+
+describe('PackCatalogPanel GPT builder', () => {
+  it('creates a topic prompt and saves pasted JSON as a permanent template', async () => {
+    const customPack = {
+      slug: 'countries-world', title: 'Страны мира', topic: 'География', icon: '🌍', short_description: 'Готовый квиз о странах мира.',
+      description: 'Готовый тематический квиз о странах, столицах и географии.', estimated_minutes: 30, difficulty: 'Средняя', game_mode: 'team' as const,
+      round_title: 'Вокруг света', disclaimer: 'Факты проверены.', sources: [], theme: DEFAULT_BRANDING, question_count: 20, sample_questions: [], is_custom: true,
+    }
+    vi.spyOn(api, 'quizPacks').mockResolvedValueOnce([]).mockResolvedValueOnce([customPack])
+    vi.spyOn(api, 'quizPackPrompt').mockResolvedValue({ prompt: 'Найди надёжные источники и верни JSON', topic: 'Страны мира', question_count: 20 })
+    const importTemplate = vi.spyOn(api, 'importQuizPack').mockResolvedValue(customPack)
+
+    render(<MemoryRouter><PackCatalogPanel onInstalled={vi.fn()} /></MemoryRouter>)
+    await waitFor(() => expect(api.quizPacks).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /создать шаблон с gpt/i }))
+    fireEvent.change(screen.getByLabelText('Тема квиза'), { target: { value: 'Страны мира' } })
+    fireEvent.click(screen.getByRole('button', { name: /^создать промпт$/i }))
+    expect(await screen.findByDisplayValue('Найди надёжные источники и верни JSON')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /у меня есть json/i }))
+    fireEvent.change(screen.getByPlaceholderText(/schema_version/), { target: { value: '```json\n{"schema_version":1,"slug":"countries-world"}\n```' } })
+    fireEvent.click(screen.getByRole('button', { name: /проверить и сохранить/i }))
+
+    await waitFor(() => expect(importTemplate).toHaveBeenCalledWith({ schema_version: 1, slug: 'countries-world' }))
+    expect(await screen.findByText(/шаблон «страны мира» сохранён/i)).toBeInTheDocument()
+    expect(screen.getByText('Мой шаблон')).toBeInTheDocument()
   })
 })

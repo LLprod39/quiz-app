@@ -166,8 +166,9 @@ QUIZ_PACKS = [
 PACKS_BY_SLUG = {pack["slug"]: pack for pack in QUIZ_PACKS}
 
 
-def public_pack(pack: dict, include_samples: bool = True) -> dict:
+def public_pack(pack: dict, include_samples: bool = True, is_custom: bool = False) -> dict:
     result = {key: value for key, value in pack.items() if key != "questions"}
     result["question_count"] = len(pack["questions"])
     result["sample_questions"] = [question["text"] for question in pack["questions"][:5]] if include_samples else []
+    result["is_custom"] = is_custom
     return result

@@ -1,4 +1,4 @@
-import type { EventData, Question, QuizPack, Snapshot, ThemeConfig } from '../types'
+import type { EventData, Question, QuizPack, QuizPackDefinition, Snapshot, ThemeConfig } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
@@ -24,7 +24,9 @@ async function request<T>(path: string, options: RequestInit = {}, admin = false
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers })
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: 'Ошибка соединения' }))
-    throw new ApiError(response.status, body.detail || 'Ошибка запроса')
+    const detail = body.detail
+    const message = Array.isArray(detail) ? detail.map(item => item?.msg || String(item)).join('; ') : detail || 'Ошибка запроса'
+    throw new ApiError(response.status, message)
   }
   return response.json()
 }
@@ -33,6 +35,11 @@ export const api = {
   branding: () => request<ThemeConfig>('/branding'),
   quizPacks: () => request<QuizPack[]>('/quiz-packs'),
   quizPack: (slug: string) => request<QuizPack>(`/quiz-packs/${encodeURIComponent(slug)}`),
+  quizPackPrompt: (data: { topic: string; question_count: number; difficulty: string }) => request<{ prompt: string; topic: string; question_count: number }>('/quiz-packs/gpt-prompt', { method: 'POST', body: JSON.stringify(data) }, true),
+  importQuizPack: (data: QuizPackDefinition) => request<QuizPack>('/quiz-packs/import', { method: 'POST', body: JSON.stringify(data) }, true),
+  quizPackDefinition: (slug: string) => request<QuizPackDefinition>(`/quiz-packs/${encodeURIComponent(slug)}/definition`, {}, true),
+  updateQuizPackDefinition: (slug: string, data: QuizPackDefinition) => request<QuizPack>(`/quiz-packs/${encodeURIComponent(slug)}/definition`, { method: 'PUT', body: JSON.stringify(data) }, true),
+  deleteQuizPack: (slug: string) => request<{ status: string; slug: string }>(`/quiz-packs/${encodeURIComponent(slug)}`, { method: 'DELETE' }, true),
   installQuizPack: (slug: string, replaceActive = false) => request<EventData>(`/quiz-packs/${encodeURIComponent(slug)}/install`, { method: 'POST', body: JSON.stringify({ replace_active: replaceActive }) }, true),
   login: (email: string, password: string) => request<{ access_token: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   events: () => request<EventData[]>('/events', {}, true),

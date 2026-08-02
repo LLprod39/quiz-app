@@ -40,6 +40,15 @@ class Event(Base):
     sessions: Mapped[list["GameSession"]] = relationship(back_populates="event", cascade="all, delete-orphan")
 
 
+class QuizPackTemplate(Base):
+    __tablename__ = "quiz_pack_templates"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    slug: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    definition: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
 class Questionnaire(Base):
     __tablename__ = "questionnaires"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)

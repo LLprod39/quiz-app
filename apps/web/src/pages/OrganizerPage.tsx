@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Activity, Archive, ArrowLeft, BarChart3, BookOpenText, Check, ChevronRight, CircleHelp, ClipboardList, Copy, Crown, ExternalLink, Gamepad2, Gauge, Headphones, History, LayoutDashboard, Link2, LoaderCircle, LogOut, Monitor, MoreVertical, PartyPopper, Pencil, Play, Plus, QrCode, Radio, Save, Send, Settings2, Smartphone, Sparkles, Trash2, Upload, Users, Wifi } from 'lucide-react'
 import { Link } from '../lib/router'
 import { QRCodeSVG } from 'qrcode.react'
@@ -145,23 +145,70 @@ function QuestionnairePanel({ event, onChanged }: { event: EventData; onChanged:
 const questionTypeLabels: Record<string, string> = { single: 'Один вариант', multiple: 'Несколько вариантов', text: 'Свободный текст', number: 'Число с допуском', closest: 'Кто ближе', hero_choice: 'Выбор героя' }
 
 function EditorPanel({ event, onChanged }: { event: EventData; onChanged: () => void }) {
-  const allQuestions = event.rounds.flatMap(round => round.questions); const [selected, setSelected] = useState<Question | null>(allQuestions[0] || null); const [creating, setCreating] = useState(false)
-  const remove = async (id: string) => { if (!confirm('Удалить вопрос?')) return; await api.deleteQuestion(id); setSelected(null); onChanged() }
-  return <div className="editor-layout"><aside className="question-list"><div className="section-title"><div><span className="overline">Редактор</span><h2>Вопросы</h2></div><Badge tone={event.question_count >= 15 ? 'warning' : 'neutral'}>{event.question_count}/15</Badge></div>{event.rounds.map(round => <div className="round-group" key={round.id}><h4>{round.title}</h4>{round.questions.map((question, index) => <button key={question.id} className={selected?.id === question.id && !creating ? 'active' : ''} onClick={() => { setSelected(question); setCreating(false) }}><span>{index + 1}</span><div><b>{question.text}</b><small>{questionTypeLabels[question.type]} · {question.time_limit_seconds} сек.</small></div><ChevronRight /></button>)}</div>)}<Button variant="secondary" className="add-question" disabled={event.question_count >= 15} onClick={() => { setSelected(null); setCreating(true) }}><Plus size={18} /> Добавить вопрос</Button></aside><div className="question-workspace">{selected || creating ? <QuestionForm key={selected?.id || 'new'} event={event} question={selected} onSaved={() => { setCreating(false); onChanged() }} onDelete={selected ? () => void remove(selected.id) : undefined} /> : <Empty icon="?" title="Выберите вопрос" text="Здесь можно настроить текст, ответы, таймер и пояснение." />}</div></div>
+  const allQuestions = event.rounds.flatMap(round => round.questions)
+  const hasNewDraft = Boolean(localStorage.getItem(`question_draft_${event.id}_new`))
+  const [selected, setSelected] = useState<Question | null>(hasNewDraft ? null : allQuestions[0] || null)
+  const [creating, setCreating] = useState(hasNewDraft)
+  const [addingPresets, setAddingPresets] = useState(false)
+  const [presetError, setPresetError] = useState('')
+  const presetCount = Math.min(5, 15 - event.question_count)
+  const remove = async (id: string) => {
+    if (!confirm('Удалить вопрос?')) return
+    await api.deleteQuestion(id)
+    localStorage.removeItem(`question_draft_${event.id}_${id}`)
+    setSelected(null)
+    onChanged()
+  }
+  const addPresets = async () => {
+    if (!presetCount || !confirm(`Добавить ${presetCount} готовых вопросов для проверки игры? Их можно будет изменить или удалить.`)) return
+    setAddingPresets(true)
+    setPresetError('')
+    try {
+      const existingIds = new Set(allQuestions.map(question => question.id))
+      const updated = await api.addQuestionPresets(event.id)
+      const firstCreated = updated.rounds.flatMap(round => round.questions).find(question => !existingIds.has(question.id))
+      setSelected(firstCreated || null)
+      setCreating(false)
+      onChanged()
+    } catch (err) {
+      setPresetError(err instanceof Error ? err.message : 'Не удалось добавить заготовки')
+    } finally {
+      setAddingPresets(false)
+    }
+  }
+  return <div className="editor-layout"><aside className="question-list"><div className="section-title"><div><span className="overline">Редактор</span><h2>Вопросы</h2></div><Badge tone={event.question_count >= 15 ? 'warning' : 'neutral'}>{event.question_count}/15</Badge></div><div className="preset-box"><div><Sparkles size={18} /><span><b>Быстрый тест</b><small>Готовые вопросы разных типов</small></span></div><Button variant="secondary" disabled={!presetCount || addingPresets} onClick={() => void addPresets()}>{addingPresets ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />} {presetCount ? `Добавить ${presetCount}` : 'Лимит достигнут'}</Button>{presetError && <small className="form-error">{presetError}</small>}</div>{event.rounds.map(round => <div className="round-group" key={round.id}><h4>{round.title}</h4>{round.questions.map((question, index) => <button key={question.id} className={selected?.id === question.id && !creating ? 'active' : ''} onClick={() => { setSelected(question); setCreating(false) }}><span>{index + 1}</span><div><b>{question.text}</b><small>{questionTypeLabels[question.type]} · {question.time_limit_seconds} сек.</small></div><ChevronRight /></button>)}</div>)}<Button variant="secondary" className="add-question" disabled={event.question_count >= 15} onClick={() => { setSelected(null); setCreating(true) }}><Plus size={18} /> Добавить вопрос</Button></aside><div className="question-workspace">{selected || creating ? <QuestionForm key={selected?.id || 'new'} event={event} question={selected} onSaved={saved => { setSelected(saved); setCreating(false); onChanged() }} onDelete={selected ? () => void remove(selected.id) : undefined} /> : <Empty icon="?" title="Выберите вопрос" text="Здесь можно настроить текст, ответы, таймер и пояснение." />}</div></div>
 }
 
-function QuestionForm({ event, question, onSaved, onDelete }: { event: EventData; question: Question | null; onSaved: () => void; onDelete?: () => void }) {
+function questionFormDefaults(event: EventData, question: Question | null) {
   const defaultOptions = [0, 1, 2, 3].map(() => ({ id: createId(), text: '', is_correct: false }))
-  const [form, setForm] = useState<any>({ round_id: question?.round_id || event.rounds[0]?.id, round_title: 'Раунд 1', type: question?.type || 'single', text: question?.text || '', time_limit_seconds: question?.time_limit_seconds || 30, correct_answer: question?.correct_answer ?? null, accepted_answers: question?.accepted_answers || [], numeric_tolerance: question?.numeric_tolerance ?? 0, shuffle_options: question?.shuffle_options || false, explanation: question?.explanation || '', media_url: question?.media_url || null, media_type: question?.media_type || null, audio_replays: question?.audio_replays || 1, options: question?.options?.length ? question.options : defaultOptions })
+  return { round_id: question?.round_id || event.rounds[0]?.id, round_title: 'Раунд 1', type: question?.type || 'single', text: question?.text || '', time_limit_seconds: question?.time_limit_seconds || 30, correct_answer: question?.correct_answer ?? null, accepted_answers: question?.accepted_answers || [], numeric_tolerance: question?.numeric_tolerance ?? 0, shuffle_options: question?.shuffle_options || false, explanation: question?.explanation || '', media_url: question?.media_url || null, media_type: question?.media_type || null, audio_replays: question?.audio_replays || 1, options: question?.options?.length ? question.options : defaultOptions }
+}
+
+function QuestionForm({ event, question, onSaved, onDelete }: { event: EventData; question: Question | null; onSaved: (saved: Question) => void; onDelete?: () => void }) {
+  const draftKey = `question_draft_${event.id}_${question?.id || 'new'}`
+  const [hasDraft, setHasDraft] = useState(() => Boolean(localStorage.getItem(draftKey)))
+  const [form, setForm] = useState<any>(() => {
+    const fallback = questionFormDefaults(event, question)
+    try { return JSON.parse(localStorage.getItem(draftKey) || '') || fallback } catch { return fallback }
+  })
   const [saving, setSaving] = useState(false); const [error, setError] = useState(''); const [uploading, setUploading] = useState(false)
+  const firstRender = useRef(true)
+  const skipNextDraft = useRef(false)
+  useEffect(() => {
+    if (firstRender.current) { firstRender.current = false; return }
+    if (skipNextDraft.current) { skipNextDraft.current = false; return }
+    localStorage.setItem(draftKey, JSON.stringify(form))
+    setHasDraft(true)
+  }, [draftKey, form])
   const optionMode = ['single', 'multiple', 'hero_choice'].includes(form.type)
   const setCorrect = (id: string) => {
     if (form.type === 'multiple') { const current = new Set(form.correct_answer || []); current.has(id) ? current.delete(id) : current.add(id); setForm({ ...form, correct_answer: [...current], options: form.options.map((o: any) => ({ ...o, is_correct: current.has(o.id) })) }) }
     else setForm({ ...form, correct_answer: id, options: form.options.map((o: any) => ({ ...o, is_correct: o.id === id })) })
   }
-  const save = async () => { setSaving(true); setError(''); try { const payload = { ...form, accepted_answers: typeof form.accepted_answers === 'string' ? form.accepted_answers.split(',').map((x: string) => x.trim()).filter(Boolean) : form.accepted_answers, correct_answer: ['number', 'closest'].includes(form.type) ? Number(form.correct_answer) : form.correct_answer }; question ? await api.updateQuestion(question.id, payload) : await api.createQuestion(event.id, payload); onSaved() } catch (err) { setError(err instanceof Error ? err.message : 'Не удалось сохранить вопрос') } finally { setSaving(false) } }
+  const save = async () => { setSaving(true); setError(''); try { const payload = { ...form, accepted_answers: typeof form.accepted_answers === 'string' ? form.accepted_answers.split(',').map((x: string) => x.trim()).filter(Boolean) : form.accepted_answers, correct_answer: ['number', 'closest'].includes(form.type) ? Number(form.correct_answer) : form.correct_answer }; const saved = question ? await api.updateQuestion(question.id, payload) : await api.createQuestion(event.id, payload); localStorage.removeItem(draftKey); setHasDraft(false); onSaved(saved) } catch (err) { setError(err instanceof Error ? err.message : 'Не удалось сохранить вопрос') } finally { setSaving(false) } }
+  const resetDraft = () => { skipNextDraft.current = true; localStorage.removeItem(draftKey); setForm(questionFormDefaults(event, question)); setHasDraft(false); setError('') }
   const upload = async (file?: File) => { if (!file) return; setUploading(true); try { const media = await api.upload(event.id, file); setForm({ ...form, media_url: media.url, media_type: media.type }) } finally { setUploading(false) } }
-  return <Card className="question-form"><div className="form-heading"><div><span className="overline">{question ? 'Настройка вопроса' : 'Новый вопрос'}</span><h2>{question ? 'Редактирование' : 'Добавьте вопрос'}</h2></div><div>{onDelete && <Button variant="ghost" onClick={onDelete}><Trash2 size={17} /> Удалить</Button>}<SaveState loading={saving} /></div></div><div className="form-grid two"><Field label="Раунд"><select value={form.round_id} onChange={e => setForm({ ...form, round_id: e.target.value })}>{event.rounds.map(r => <option key={r.id} value={r.id}>{r.title}</option>)}</select></Field><Field label="Тип вопроса"><select value={form.type} onChange={e => setForm({ ...form, type: e.target.value, correct_answer: null })}>{Object.entries(questionTypeLabels).filter(([value]) => event.event_format === 'celebration' || value !== 'hero_choice').map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field></div><Field label="Текст вопроса"><textarea rows={3} value={form.text} onChange={e => setForm({ ...form, text: e.target.value })} placeholder={event.event_format === 'battle' ? 'Какой вопрос решит исход баттла?' : 'Что друзья точно должны знать?'} /></Field>
+  return <Card className="question-form"><div className="form-heading"><div><span className="overline">{question ? 'Настройка вопроса' : 'Новый вопрос'}</span><h2>{question ? 'Редактирование' : 'Добавьте вопрос'}</h2></div><div>{hasDraft && !saving && <span className="draft-state"><Check size={14} /> Черновик сохранён</span>}{hasDraft && <Button variant="ghost" onClick={resetDraft}>Сбросить</Button>}{onDelete && <Button variant="ghost" onClick={onDelete}><Trash2 size={17} /> Удалить</Button>}<SaveState loading={saving} saved={Boolean(question) && !hasDraft} /></div></div><div className="form-grid two"><Field label="Раунд"><select value={form.round_id} onChange={e => setForm({ ...form, round_id: e.target.value })}>{event.rounds.map(r => <option key={r.id} value={r.id}>{r.title}</option>)}</select></Field><Field label="Тип вопроса"><select value={form.type} onChange={e => setForm({ ...form, type: e.target.value, correct_answer: null })}>{Object.entries(questionTypeLabels).filter(([value]) => event.event_format === 'celebration' || value !== 'hero_choice').map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field></div><Field label="Текст вопроса"><textarea rows={3} value={form.text} onChange={e => setForm({ ...form, text: e.target.value })} placeholder={event.event_format === 'battle' ? 'Какой вопрос решит исход баттла?' : 'Что друзья точно должны знать?'} /></Field>
     {optionMode && <div className="options-editor"><div className="field-label"><span>Варианты ответа</span><small>{form.type === 'multiple' ? 'Отметьте все правильные' : form.type === 'hero_choice' ? 'Герой выберет правильный в эфире' : 'Отметьте один правильный'}</small></div>{form.options.map((option: any, index: number) => <div className="option-edit" key={option.id}><button className={`correct-toggle ${form.type === 'hero_choice' ? 'hidden' : option.is_correct ? 'selected' : ''}`} onClick={() => setCorrect(option.id)} aria-label="Правильный вариант">{option.is_correct ? <Check /> : String.fromCharCode(65 + index)}</button><input value={option.text} onChange={e => setForm({ ...form, options: form.options.map((o: any) => o.id === option.id ? { ...o, text: e.target.value } : o) })} placeholder={`Вариант ${index + 1}`} />{form.options.length > 2 && <button className="icon-button" onClick={() => setForm({ ...form, options: form.options.filter((o: any) => o.id !== option.id) })}><Trash2 size={16} /></button>}</div>)}{form.options.length < 6 && <button className="text-button" onClick={() => setForm({ ...form, options: [...form.options, { id: createId(), text: '', is_correct: false }] })}><Plus size={16} /> Ещё вариант</button>}</div>}
     {form.type === 'text' && <><Field label="Правильный ответ"><input value={form.correct_answer || ''} onChange={e => setForm({ ...form, correct_answer: e.target.value })} /></Field><Field label="Синонимы" hint="Разделите запятыми"><input value={Array.isArray(form.accepted_answers) ? form.accepted_answers.join(', ') : form.accepted_answers} onChange={e => setForm({ ...form, accepted_answers: e.target.value })} placeholder="Питер, СПб" /></Field></>}
     {['number', 'closest'].includes(form.type) && <div className="form-grid two"><Field label="Правильное число"><input type="number" value={form.correct_answer ?? ''} onChange={e => setForm({ ...form, correct_answer: e.target.value })} /></Field>{form.type === 'number' && <Field label="Допуск ±"><input type="number" min="0" value={form.numeric_tolerance} onChange={e => setForm({ ...form, numeric_tolerance: Number(e.target.value) })} /></Field>}</div>}

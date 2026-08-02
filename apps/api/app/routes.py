@@ -67,6 +67,44 @@ class QuestionBody(BaseModel):
     options: list[dict] = Field(default_factory=list)
 
 
+QUESTION_PRESETS = [
+    {
+        "type": "single",
+        "text": "Какой океан самый большой на Земле?",
+        "options": ["Атлантический", "Тихий", "Индийский", "Северный Ледовитый"],
+        "correct_indexes": [1],
+        "explanation": "Тихий океан занимает больше трети поверхности Земли.",
+    },
+    {
+        "type": "multiple",
+        "text": "Какие из этих животных относятся к млекопитающим?",
+        "options": ["Дельфин", "Акула", "Летучая мышь", "Пингвин"],
+        "correct_indexes": [0, 2],
+        "explanation": "Дельфин и летучая мышь кормят детёнышей молоком.",
+    },
+    {
+        "type": "number",
+        "text": "Сколько минут в двух часах?",
+        "correct_answer": 120,
+        "numeric_tolerance": 0,
+        "explanation": "В одном часе 60 минут, поэтому 2 × 60 = 120.",
+    },
+    {
+        "type": "text",
+        "text": "Как называется естественный спутник Земли?",
+        "correct_answer": "Луна",
+        "accepted_answers": ["луна"],
+        "explanation": "Луна — единственный естественный спутник Земли.",
+    },
+    {
+        "type": "closest",
+        "text": "В каком году человек впервые высадился на Луне?",
+        "correct_answer": 1969,
+        "explanation": "Экипаж Apollo 11 высадился на Луне в 1969 году.",
+    },
+]
+
+
 class JoinBody(BaseModel):
     display_name: str = Field(min_length=1, max_length=80)
     patronymic_initial: str = Field(default="", max_length=1)
@@ -356,6 +394,54 @@ def update_question(question_id: str, body: QuestionBody, _: str = Depends(requi
     db.commit()
     question = db.scalar(select(Question).options(selectinload(Question.options), selectinload(Question.round)).where(Question.id == question_id))
     return serialize_question(question)
+
+
+@router.post("/events/{event_id}/question-presets")
+def add_question_presets(event_id: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    event = db.scalar(event_query().where(Event.id == event_id))
+    if not event:
+        raise HTTPException(404, "Мероприятие не найдено")
+    remaining = 15 - len(ordered_questions(event))
+    if remaining <= 0:
+        raise HTTPException(400, "В викторине уже 15 вопросов")
+    round_ = event.rounds[0] if event.rounds else Round(event_id=event.id, title="Раунд 1", sort_order=0)
+    if not event.rounds:
+        db.add(round_)
+        db.flush()
+    created_ids = []
+    base_sort_order = len(round_.questions)
+    for preset_index, preset in enumerate(QUESTION_PRESETS[:remaining]):
+        question = Question(
+            round_id=round_.id,
+            type=preset["type"],
+            text=preset["text"],
+            time_limit_seconds=30,
+            correct_answer=preset.get("correct_answer"),
+            accepted_answers=preset.get("accepted_answers", []),
+            numeric_tolerance=preset.get("numeric_tolerance"),
+            explanation=preset.get("explanation", ""),
+            sort_order=base_sort_order + preset_index,
+        )
+        db.add(question)
+        db.flush()
+        correct_indexes = set(preset.get("correct_indexes", []))
+        correct_ids = []
+        for index, text in enumerate(preset.get("options", [])):
+            option_id = uid()
+            is_correct = index in correct_indexes
+            db.add(AnswerOption(id=option_id, question_id=question.id, text=text, is_correct=is_correct, sort_order=index))
+            if is_correct:
+                correct_ids.append(option_id)
+        if question.type == "single" and correct_ids:
+            question.correct_answer = correct_ids[0]
+        elif question.type == "multiple":
+            question.correct_answer = correct_ids
+        created_ids.append(question.id)
+    db.add(AuditLog(action="questions.presets_added", after={"event_id": event.id, "question_ids": created_ids}))
+    db.commit()
+    db.expire_all()
+    event = db.scalar(event_query().where(Event.id == event_id))
+    return serialize_event(event)
 
 
 @router.delete("/questions/{question_id}")

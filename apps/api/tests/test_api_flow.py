@@ -94,6 +94,15 @@ def test_thematic_battle_has_no_hero_features():
         )
         assert questionnaire_item.status_code == 400
 
+        presets = client.post(f"/api/events/{event['id']}/question-presets", headers=headers)
+        assert presets.status_code == 200
+        preset_event = presets.json()
+        assert preset_event["question_count"] == 5
+        questions = preset_event["rounds"][0]["questions"]
+        assert {question["type"] for question in questions} == {"single", "multiple", "number", "text", "closest"}
+        single = next(question for question in questions if question["type"] == "single")
+        assert single["correct_answer"] in {option["id"] for option in single["options"]}
+
     engine.dispose()
     if database.exists():
         database.unlink()

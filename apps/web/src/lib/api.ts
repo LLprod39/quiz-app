@@ -1,4 +1,4 @@
-import type { EventData, Snapshot } from '../types'
+import type { EventData, Question, Snapshot } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
@@ -30,8 +30,9 @@ export const api = {
   toQuestion: (itemId: string) => request(`/questionnaire-items/${itemId}/to-question`, { method: 'POST' }, true),
   questionnaire: (token: string) => request<any>(`/questionnaires/${token}`),
   submitQuestionnaire: (token: string, responses: Record<string, string>) => request(`/questionnaires/${token}/submit`, { method: 'POST', body: JSON.stringify({ responses }) }),
-  createQuestion: (eventId: string, data: unknown) => request(`/events/${eventId}/questions`, { method: 'POST', body: JSON.stringify(data) }, true),
-  updateQuestion: (id: string, data: unknown) => request(`/questions/${id}`, { method: 'PUT', body: JSON.stringify(data) }, true),
+  createQuestion: (eventId: string, data: unknown) => request<Question>(`/events/${eventId}/questions`, { method: 'POST', body: JSON.stringify(data) }, true),
+  updateQuestion: (id: string, data: unknown) => request<Question>(`/questions/${id}`, { method: 'PUT', body: JSON.stringify(data) }, true),
+  addQuestionPresets: (eventId: string) => request<EventData>(`/events/${eventId}/question-presets`, { method: 'POST' }, true),
   deleteQuestion: (id: string) => request(`/questions/${id}`, { method: 'DELETE' }, true),
   openSession: (eventId: string) => request<Snapshot>(`/events/${eventId}/sessions`, { method: 'POST' }, true),
   snapshot: (code: string, token?: string) => request<Snapshot>(`/sessions/${code}${token ? `?device_token=${encodeURIComponent(token)}` : ''}`),

@@ -20,7 +20,7 @@ const question = {
 function snapshot(status: Snapshot['session']['status']): Snapshot {
   return {
     type: 'session.snapshot', version: status === 'finished' ? 2 : 1, server_time: new Date().toISOString(),
-    session: { id: 'session-1', join_code: 'ABC123', status, deployment_mode: 'lan', current_question_index: 1, question_count: 2, answered_count: 2 },
+    session: { id: 'session-1', join_code: 'ABC123', status, deployment_mode: 'lan', current_question_index: 1, question_count: 2, answered_count: 2, answer_target_count: 2 },
     event: { id: event.id, title: event.title, event_format: event.event_format, topic: event.topic, hero_name: '', game_mode: event.game_mode, host_mode: 'auto', auto_advance_seconds: 5, theme: DEFAULT_BRANDING },
     question, participants: [{ id: 'p1', name: 'Анна', avatar: '🎈', role: 'guest', ready: true, connection_status: 'online', eligible: true }, { id: 'p2', name: 'Иван', avatar: '🚀', role: 'guest', ready: true, connection_status: 'online', eligible: true }],
     teams: [], private_result: null, leaderboard: [],

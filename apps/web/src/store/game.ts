@@ -51,7 +51,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (payload.type === 'question.progress') {
         const current = get().snapshot
         if (current && payload.version >= current.version) {
-          set({ snapshot: { ...current, version: payload.version, session: { ...current.session, answered_count: payload.answered_count } } })
+          set({ snapshot: { ...current, version: payload.version, session: { ...current.session, answered_count: payload.answered_count, answer_target_count: payload.answer_target_count ?? current.session.answer_target_count } } })
         }
       }
     }

@@ -33,6 +33,9 @@ def test_vertical_game_flow():
         joined = client.post(f"/api/sessions/{code}/join", json={"display_name": "Анна", "avatar": "🎈"})
         assert joined.status_code == 200
         token = joined.json()["device_token"]
+        second_joined = client.post(f"/api/sessions/{code}/join", json={"display_name": "Иван", "avatar": "🚀"})
+        assert second_joined.status_code == 200
+        second_token = second_joined.json()["device_token"]
 
         prepared = client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "prepare"})
         assert prepared.json()["session"]["status"] == "countdown"
@@ -40,13 +43,24 @@ def test_vertical_game_flow():
         question = prepared.json()["question"]
         started = client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "start"})
         assert started.json()["session"]["status"] == "answering"
+        assert started.json()["session"]["answer_target_count"] == 2
 
         answer = client.post(f"/api/sessions/{code}/answer", json={"device_token": token, "request_id": "request-1", "answer": question["options"][1]["id"]})
         assert answer.status_code == 200
+        assert answer.json()["question_closed"] is False
+        in_progress = client.get(f"/api/sessions/{code}").json()
+        assert in_progress["session"]["status"] == "answering"
+        assert in_progress["session"]["answered_count"] == 1
+        second_answer = client.post(f"/api/sessions/{code}/answer", json={"device_token": second_token, "request_id": "request-2", "answer": question["options"][0]["id"]})
+        assert second_answer.status_code == 200
+        assert second_answer.json()["question_closed"] is True
+        closed = client.get(f"/api/sessions/{code}").json()
+        assert closed["session"]["status"] == "locked"
+        assert closed["session"]["answered_count"] == 2
+        assert closed["session"]["deadline_at"] is not None
         duplicate = client.post(f"/api/sessions/{code}/answer", json={"device_token": token, "request_id": "request-1", "answer": "changed"})
         assert duplicate.json()["duplicate"] is True
 
-        client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "lock"})
         reveal = client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "reveal"})
         assert reveal.status_code == 200
         private = client.get(f"/api/sessions/{code}?device_token={token}").json()["private_result"]

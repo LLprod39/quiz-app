@@ -43,7 +43,7 @@ export interface Team { id: string; name: string; avatar: string; color: string;
 export interface Ranking { id: string; name: string; avatar: string; color?: string; correct_count: number; correct_time_ms: number; rank: number; answer?: unknown; elapsed_ms?: number; is_correct?: boolean | null }
 export interface Snapshot {
   type: string; version: number; server_time: string
-  session: { id: string; join_code: string; status: GameStatus; deployment_mode: string; current_question_index: number; question_count: number; deadline_at?: string | null; answered_count: number }
+  session: { id: string; join_code: string; status: GameStatus; deployment_mode: string; current_question_index: number; question_count: number; deadline_at?: string | null; answered_count: number; answer_target_count: number }
   event: { id: string; title: string; event_format: 'celebration' | 'battle'; topic: string; hero_name: string; hero_photo_url?: string; game_mode: string; host_mode: 'auto' | 'manual'; auto_advance_seconds: number; theme: ThemeConfig }
   question?: Question | null; participants: Participant[]; teams: Team[]; private_result?: Ranking | null; leaderboard: Ranking[]
 }

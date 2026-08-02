@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
 from .db import get_db
-from .game import MAX_QUESTIONS, auto_transition_deadline, bump_version, check_answer, generate_join_code, iso_utc, leaderboard, ordered_questions, recalculate_submissions, session_snapshot, utcnow
+from .game import MAX_QUESTIONS, answer_target_count, auto_transition_deadline, bump_version, check_answer, generate_join_code, iso_utc, leaderboard, ordered_questions, recalculate_submissions, session_snapshot, utcnow
 from .models import (
     AnswerOption, AuditLog, DeviceTransfer, Event, GameSession, Participant, Question, Questionnaire,
     QuestionnaireItem, QuestionnaireResponse, Round, Submission, Team, uid,
@@ -271,8 +271,11 @@ def serialize_questionnaire(questionnaire: Questionnaire) -> dict:
     }
 
 
-def find_session(db: Session, code: str) -> GameSession:
-    session = db.scalar(session_query().where(GameSession.join_code == code.upper()).execution_options(populate_existing=True))
+def find_session(db: Session, code: str, for_update: bool = False) -> GameSession:
+    query = session_query().where(GameSession.join_code == code.upper()).execution_options(populate_existing=True)
+    if for_update:
+        query = query.with_for_update()
+    session = db.scalar(query)
     if not session:
         raise HTTPException(404, "Комната не найдена")
     return session
@@ -731,7 +734,7 @@ def claim_transfer(code: str, request_id: str, body: TransferClaimBody, db: Sess
 
 @router.post("/sessions/{code}/answer")
 def submit_answer(code: str, body: AnswerBody, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    session = find_session(db, code); participant = find_participant(db, session, body.device_token)
+    session = find_session(db, code, for_update=True); participant = find_participant(db, session, body.device_token)
     existing_request = db.scalar(select(Submission).where(Submission.request_id == body.request_id))
     if existing_request:
         return {"status": "accepted", "duplicate": True, "elapsed_ms": existing_request.elapsed_ms}
@@ -750,11 +753,23 @@ def submit_answer(code: str, body: AnswerBody, background_tasks: BackgroundTasks
     started = (deadline - timedelta(seconds=session.current_question.time_limit_seconds)) if deadline else now
     elapsed_ms = max(0, int((now - started).total_seconds() * 1000))
     submission = Submission(request_id=body.request_id, session_id=session.id, question_id=session.current_question_id, participant_id=None if session.event.game_mode == "team" else participant.id, team_id=participant.team_id if session.event.game_mode == "team" else None, answer_payload=body.answer, elapsed_ms=elapsed_ms, is_correct=check_answer(session.current_question, body.answer))
-    db.add(submission); db.flush(); version = bump_version(db, session.id); db.commit()
+    db.add(submission); db.flush()
     answered_count = db.scalar(select(func.count()).select_from(Submission).where(Submission.session_id == session.id, Submission.question_id == session.current_question_id))
+    target_count = answer_target_count(session)
+    question_closed = target_count > 0 and answered_count >= target_count
+    if question_closed:
+        recalculate_submissions(db, session, session.current_question)
+        session.status = "review" if session.current_question.type in {"text", "hero_choice"} else "locked"
+        session.deadline_at = auto_transition_deadline(session.event, session.status, session.current_question)
+        db.add(AuditLog(session_id=session.id, action="question.all_answered", after={"answered_count": answered_count, "target_count": target_count, "status": session.status}))
+    version = bump_version(db, session.id); db.commit()
     if hub.has_connections(session.join_code):
-        background_tasks.add_task(hub.broadcast, session.join_code, {"type": "question.progress", "version": version, "answered_count": answered_count})
-    return {"status": "accepted", "duplicate": False, "elapsed_ms": elapsed_ms, "version": version}
+        if question_closed:
+            session = find_session(db, code)
+            background_tasks.add_task(hub.broadcast, session.join_code, session_snapshot(db, session))
+        else:
+            background_tasks.add_task(hub.broadcast, session.join_code, {"type": "question.progress", "version": version, "answered_count": answered_count, "answer_target_count": target_count})
+    return {"status": "accepted", "duplicate": False, "elapsed_ms": elapsed_ms, "version": version, "question_closed": question_closed}
 
 
 @router.post("/sessions/{code}/actions")

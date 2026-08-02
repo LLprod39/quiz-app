@@ -212,6 +212,16 @@ def public_question(question: Question | None, reveal: bool = False) -> dict | N
     return data
 
 
+def answer_target_count(session: GameSession) -> int:
+    eligible = [
+        participant for participant in session.participants
+        if participant.role != "hero" and participant.eligible_from_index <= session.current_question_index
+    ]
+    if session.event.game_mode == "team":
+        return len({participant.team_id for participant in eligible if participant.team_id})
+    return len(eligible)
+
+
 def session_snapshot(db: Session, session: GameSession, participant: Participant | None = None) -> dict:
     question_count = len(ordered_questions(session.event))
     answered_count = 0
@@ -245,6 +255,7 @@ def session_snapshot(db: Session, session: GameSession, participant: Participant
             "question_count": question_count,
             "deadline_at": iso_utc(session.deadline_at),
             "answered_count": answered_count,
+            "answer_target_count": answer_target_count(session),
         },
         "event": {
             "id": session.event.id,

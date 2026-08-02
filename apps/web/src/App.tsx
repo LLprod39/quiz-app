@@ -5,10 +5,12 @@ import { JoinPage } from './pages/JoinPage'
 import { GuestPage } from './pages/GuestPage'
 import { ScreenPage } from './pages/ScreenPage'
 import { HeroPage } from './pages/HeroPage'
+import { QuizCatalogPage } from './pages/QuizCatalogPage'
 
 export default function App() {
   const { pathname, navigate } = useLocation()
   if (pathname === '/') return <HomePage />
+  if (pathname === '/quizzes' || /^\/quiz\/[^/]+$/.test(pathname)) return <QuizCatalogPage />
   if (pathname === '/admin') return <OrganizerPage />
   if (pathname === '/join' || /^\/join\/[^/]+$/.test(pathname)) return <JoinPage />
   if (/^\/play\/[^/]+$/.test(pathname)) return <GuestPage />

@@ -108,6 +108,46 @@ def test_thematic_battle_has_no_hero_features():
         database.unlink()
 
 
+def test_quiz_pack_catalog_and_install():
+    database = Path("test_api_flow.db")
+    engine.dispose()
+    if database.exists():
+        database.unlink()
+    with TestClient(app) as client:
+        packs = client.get("/api/quiz-packs")
+        assert packs.status_code == 200
+        assert {pack["slug"] for pack in packs.json()} == {"marvel-universe", "space-explorers", "world-cinema"}
+        marvel = client.get("/api/quiz-packs/marvel-universe").json()
+        assert marvel["question_count"] == 20
+        assert marvel["theme"]["brand_name"] == "Marvel Quiz Battle"
+        assert len(marvel["sample_questions"]) == 5
+
+        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        conflict = client.post("/api/quiz-packs/marvel-universe/install", headers=headers, json={"replace_active": False})
+        assert conflict.status_code == 409
+
+        installed = client.post("/api/quiz-packs/marvel-universe/install", headers=headers, json={"replace_active": True})
+        assert installed.status_code == 200
+        event = installed.json()
+        assert event["title"] == "Marvel Quiz Battle"
+        assert event["topic"] == "Marvel: герои и мультивселенная"
+        assert event["game_mode"] == "team"
+        assert event["question_count"] == 20
+        assert event["theme"]["logo_mark"] == "MV"
+        assert all(question["correct_answer"] in {option["id"] for option in question["options"]} for question in event["rounds"][0]["questions"])
+
+        events = client.get("/api/events", headers=headers).json()
+        assert sum(item["status"] == "archived" for item in events) >= 1
+        opened = client.post(f"/api/events/{event['id']}/sessions", headers=headers)
+        assert opened.status_code == 200
+        assert opened.json()["session"]["question_count"] == 20
+
+    engine.dispose()
+    if database.exists():
+        database.unlink()
+
+
 def test_public_branding_follows_active_event():
     database = Path("test_api_flow.db")
     engine.dispose()

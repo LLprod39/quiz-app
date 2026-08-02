@@ -19,6 +19,7 @@ export function useParams(): Record<string, string | undefined> {
   const parts = useLocation().pathname.split('/').filter(Boolean)
   if (['join', 'play', 'screen'].includes(parts[0])) return { code: parts[1] }
   if (parts[0] === 'hero') return { token: parts[1] }
+  if (parts[0] === 'quiz') return { slug: parts[1] }
   return {}
 }
 

@@ -13,6 +13,7 @@ from .models import AnswerOption, Event, GameSession, Participant, Question, Sub
 
 
 ACTIVE_STATES = {"countdown", "answering", "locked", "review", "reveal", "between_questions", "paused"}
+MAX_QUESTIONS = 50
 
 
 def utcnow() -> datetime:
@@ -40,7 +41,7 @@ def bump_version(db: Session, session_id: str) -> int:
 
 
 def ordered_questions(event: Event) -> list[Question]:
-    return [q for rnd in sorted(event.rounds, key=lambda x: x.sort_order) for q in sorted(rnd.questions, key=lambda x: x.sort_order) if q.status != "disabled"][:15]
+    return [q for rnd in sorted(event.rounds, key=lambda x: x.sort_order) for q in sorted(rnd.questions, key=lambda x: x.sort_order) if q.status != "disabled"][:MAX_QUESTIONS]
 
 
 def normalize_text(value: Any) -> str:

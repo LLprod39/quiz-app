@@ -10,12 +10,13 @@ from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
 from .db import get_db
-from .game import bump_version, check_answer, generate_join_code, iso_utc, leaderboard, ordered_questions, recalculate_submissions, session_snapshot, utcnow
+from .game import MAX_QUESTIONS, bump_version, check_answer, generate_join_code, iso_utc, leaderboard, ordered_questions, recalculate_submissions, session_snapshot, utcnow
 from .models import (
     AnswerOption, AuditLog, DeviceTransfer, Event, GameSession, Participant, Question, Questionnaire,
     QuestionnaireItem, QuestionnaireResponse, Round, Submission, Team, uid,
 )
 from .realtime import hub
+from .quiz_packs import PACKS_BY_SLUG, QUIZ_PACKS, public_pack
 from .security import create_admin_token, new_device_token, require_admin, token_hash
 
 
@@ -80,6 +81,10 @@ class EventBody(BaseModel):
         if self.event_format == "battle" and not self.topic:
             raise ValueError("Укажите тему квиз-баттла")
         return self
+
+
+class PackInstallBody(BaseModel):
+    replace_active: bool = False
 
 
 class QuestionBody(BaseModel):
@@ -294,6 +299,61 @@ def public_branding(db: Session = Depends(get_db)):
     return normalize_theme(event.theme) if event else ThemeBody().model_dump()
 
 
+@router.get("/quiz-packs")
+def list_quiz_packs():
+    return [public_pack(pack) for pack in QUIZ_PACKS]
+
+
+@router.get("/quiz-packs/{slug}")
+def get_quiz_pack(slug: str):
+    pack = PACKS_BY_SLUG.get(slug)
+    if not pack:
+        raise HTTPException(404, "Тематический квиз не найден")
+    return public_pack(pack)
+
+
+@router.post("/quiz-packs/{slug}/install")
+def install_quiz_pack(slug: str, body: PackInstallBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    pack = PACKS_BY_SLUG.get(slug)
+    if not pack:
+        raise HTTPException(404, "Тематический квиз не найден")
+    active = db.scalar(event_query().where(Event.status.notin_(["archived", "finished"])))
+    if active and not body.replace_active:
+        raise HTTPException(409, "Сейчас есть активный квиз. Подтвердите его перенос в архив.")
+    if active:
+        active.status = "archived"
+        for session in active.sessions:
+            if session.status not in {"finished", "archived"}:
+                session.status = "archived"
+                session.finished_at = utcnow()
+                session.deadline_at = None
+
+    event = Event(
+        title=pack["title"], event_format="battle", topic=pack["topic"], hero_name="", event_date="",
+        status="draft", game_mode="team", allow_late_join=True, hero_photo_url=None,
+        theme=ThemeBody(**pack["theme"]).model_dump(),
+    )
+    round_ = Round(title=pack["round_title"], sort_order=0)
+    event.rounds.append(round_)
+    for question_index, item in enumerate(pack["questions"]):
+        correct_id = uid()
+        question = Question(
+            type="single", text=item["text"], time_limit_seconds=30, correct_answer=correct_id,
+            shuffle_options=True, explanation=item["explanation"], sort_order=question_index,
+        )
+        question.options = [
+            AnswerOption(id=correct_id if answer_index == 0 else uid(), text=answer, is_correct=answer_index == 0, sort_order=answer_index)
+            for answer_index, answer in enumerate(item["answers"])
+        ]
+        round_.questions.append(question)
+    db.add(event)
+    db.flush()
+    db.add(AuditLog(action="quiz_pack.installed", after={"event_id": event.id, "pack": slug, "question_count": len(pack["questions"])}))
+    db.commit()
+    event = db.scalar(event_query().where(Event.id == event.id))
+    return serialize_event(event)
+
+
 @router.post("/auth/login")
 def login(body: LoginBody):
     if body.email.lower() != settings.organizer_email.lower() or body.password != settings.organizer_password:
@@ -398,7 +458,7 @@ def questionnaire_to_question(item_id: str, _: str = Depends(require_admin), db:
     item = db.scalar(select(QuestionnaireItem).options(selectinload(QuestionnaireItem.response), selectinload(QuestionnaireItem.questionnaire).selectinload(Questionnaire.event).selectinload(Event.rounds).selectinload(Round.questions)).where(QuestionnaireItem.id == item_id))
     if not item or not item.response: raise HTTPException(400, "Сначала нужен ответ героя")
     event = item.questionnaire.event
-    if len(ordered_questions(event)) >= 15: raise HTTPException(400, "В викторине уже 15 вопросов")
+    if len(ordered_questions(event)) >= MAX_QUESTIONS: raise HTTPException(400, f"В викторине уже {MAX_QUESTIONS} вопросов")
     round_ = event.rounds[0] if event.rounds else Round(title="Раунд 1", sort_order=0, event=event)
     question = Question(text=item.text, type="text", correct_answer=item.response.value, accepted_answers=[], sort_order=len(round_.questions), explanation=f"Ответ {event.hero_name}: {item.response.value}")
     round_.questions.append(question); db.commit()
@@ -411,7 +471,7 @@ def create_question(event_id: str, body: QuestionBody, _: str = Depends(require_
     if not event: raise HTTPException(404, "Мероприятие не найдено")
     if event.event_format == "battle" and body.type == "hero_choice":
         raise HTTPException(400, "В тематическом баттле нет типа «Выбор героя»")
-    if len(ordered_questions(event)) >= 15: raise HTTPException(400, "В викторине может быть не более 15 вопросов")
+    if len(ordered_questions(event)) >= MAX_QUESTIONS: raise HTTPException(400, f"В викторине может быть не более {MAX_QUESTIONS} вопросов")
     round_ = next((r for r in event.rounds if r.id == body.round_id), None)
     if not round_:
         round_ = Round(event_id=event.id, title=body.round_title, sort_order=len(event.rounds)); db.add(round_); db.flush()
@@ -453,9 +513,9 @@ def add_question_presets(event_id: str, _: str = Depends(require_admin), db: Ses
     event = db.scalar(event_query().where(Event.id == event_id))
     if not event:
         raise HTTPException(404, "Мероприятие не найдено")
-    remaining = 15 - len(ordered_questions(event))
+    remaining = MAX_QUESTIONS - len(ordered_questions(event))
     if remaining <= 0:
-        raise HTTPException(400, "В викторине уже 15 вопросов")
+        raise HTTPException(400, f"В викторине уже {MAX_QUESTIONS} вопросов")
     round_ = event.rounds[0] if event.rounds else Round(event_id=event.id, title="Раунд 1", sort_order=0)
     if not event.rounds:
         db.add(round_)

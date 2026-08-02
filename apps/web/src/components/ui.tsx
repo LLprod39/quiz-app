@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode } from 'react'
+import type { ButtonHTMLAttributes, CSSProperties, PropsWithChildren, ReactNode } from 'react'
 import { Check, Cloud, LoaderCircle, Wifi, WifiOff } from 'lucide-react'
 import { useBranding } from '../lib/branding'
 
@@ -11,8 +11,8 @@ export function Button({ className = '', variant = 'primary', children, ...props
   return <button className={`button button-${variant} ${className}`} {...props}>{children}</button>
 }
 
-export function Card({ children, className = '' }: PropsWithChildren<{ className?: string }>) {
-  return <section className={`card ${className}`}>{children}</section>
+export function Card({ children, className = '', style }: PropsWithChildren<{ className?: string; style?: CSSProperties }>) {
+  return <section className={`card ${className}`} style={style}>{children}</section>
 }
 
 export function Badge({ children, tone = 'neutral' }: PropsWithChildren<{ tone?: 'neutral' | 'success' | 'warning' | 'danger' | 'accent' }>) {

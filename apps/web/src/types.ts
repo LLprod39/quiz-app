@@ -20,6 +20,14 @@ export interface ThemeConfig {
   trust_no_registration: string; trust_players: string; trust_offline: string
   step_format: string; step_join: string; step_show: string
 }
+export interface QuizPackSource { name: string; url: string; license: string; license_url: string }
+export interface QuizPack {
+  slug: string; title: string; topic: string; icon: string
+  short_description: string; description: string; estimated_minutes: number
+  difficulty: string; round_title: string; disclaimer: string
+  sources: QuizPackSource[]; theme: ThemeConfig
+  question_count: number; sample_questions: string[]
+}
 export interface EventData {
   id: string; title: string; event_format: 'celebration' | 'battle'; topic: string
   hero_name: string; event_date: string; status: string

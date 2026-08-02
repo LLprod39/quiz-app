@@ -49,6 +49,20 @@ function rgb(hex: string) {
   return `${parseInt(value.slice(0, 2), 16)}, ${parseInt(value.slice(2, 4), 16)}, ${parseInt(value.slice(4, 6), 16)}`
 }
 
+export function themeStyle(theme: ThemeConfig): CSSProperties {
+  return {
+    '--accent': theme.accent,
+    '--accent-rgb': rgb(theme.accent),
+    '--secondary': theme.secondary,
+    '--secondary-rgb': rgb(theme.secondary),
+    '--bg': theme.background,
+    '--panel': theme.panel,
+    '--panel-2': theme.panel_2,
+    '--text': theme.text,
+    '--muted': theme.muted,
+  } as CSSProperties
+}
+
 export function BrandingProvider({ children }: PropsWithChildren) {
   const [branding, setBranding] = useState(DEFAULT_BRANDING)
   const refreshBranding = useCallback(async () => {
@@ -63,17 +77,7 @@ export function BrandingProvider({ children }: PropsWithChildren) {
   useEffect(() => { void refreshBranding() }, [refreshBranding])
   useEffect(() => { document.title = branding.brand_name }, [branding.brand_name])
 
-  const style = useMemo(() => ({
-    '--accent': branding.accent,
-    '--accent-rgb': rgb(branding.accent),
-    '--secondary': branding.secondary,
-    '--secondary-rgb': rgb(branding.secondary),
-    '--bg': branding.background,
-    '--panel': branding.panel,
-    '--panel-2': branding.panel_2,
-    '--text': branding.text,
-    '--muted': branding.muted,
-  } as CSSProperties), [branding])
+  const style = useMemo(() => themeStyle(branding), [branding])
 
   return <BrandingContext.Provider value={{ branding, refreshBranding }}><div className={`app-theme decor-${branding.decor}`} style={style}>{children}</div></BrandingContext.Provider>
 }

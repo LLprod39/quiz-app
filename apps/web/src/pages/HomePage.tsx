@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, Gamepad2, MonitorUp, PartyPopper, ShieldCheck, Sparkles, Users } from 'lucide-react'
+import { ArrowRight, Gamepad2, Library, MonitorUp, PartyPopper, ShieldCheck, Sparkles, Users } from 'lucide-react'
 import { Link, useNavigate } from '../lib/router'
 import { Button, Logo } from '../components/ui'
 import { useBranding } from '../lib/branding'
@@ -10,7 +10,7 @@ export function HomePage() {
   const navigate = useNavigate()
   const submit = (event: React.FormEvent) => { event.preventDefault(); if (code.trim()) navigate(`/join/${code.trim().toUpperCase()}`) }
   return <main className="landing">
-    <header className="landing-nav"><Logo /><Link className="text-link" to="/admin">{branding.organizer_link_label} <ArrowRight size={16} /></Link></header>
+    <header className="landing-nav"><Logo /><div className="landing-nav-actions"><Link className="text-link" to="/quizzes"><Library size={16} /> Все квизы</Link><Link className="text-link" to="/admin">{branding.organizer_link_label} <ArrowRight size={16} /></Link></div></header>
     <section className="hero-section">
       <div className="hero-copy">
         <div className="eyebrow"><Sparkles size={16} /> {branding.landing_eyebrow}</div>

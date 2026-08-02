@@ -1,0 +1,15 @@
+{
+  "name": "quiz-app",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": ["apps/web"],
+  "devDependencies": {
+    "jsdom": "29.0.0"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace @quiz-app/web",
+    "build": "npm run build --workspace @quiz-app/web",
+    "test": "npm run test --workspace @quiz-app/web",
+    "lint": "npm run lint --workspace @quiz-app/web"
+  }
+}

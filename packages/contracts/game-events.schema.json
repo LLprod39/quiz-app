@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quiz-app.local/contracts/game-events.schema.json",
+  "title": "Quiz App — WebSocket event",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["type", "version", "server_time", "session", "event"],
+      "properties": {
+        "type": { "const": "session.snapshot" },
+        "version": { "type": "integer", "minimum": 1 },
+        "server_time": { "type": "string", "format": "date-time" },
+        "session": { "type": "object" },
+        "event": { "type": "object" },
+        "question": { "type": ["object", "null"] },
+        "participants": { "type": "array" },
+        "teams": { "type": "array" },
+        "private_result": { "type": ["object", "null"] },
+        "leaderboard": { "type": "array" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["type", "sent_at"],
+      "properties": { "type": { "const": "ping" }, "sent_at": { "type": "integer" } }
+    }
+  ]
+}

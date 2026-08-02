@@ -1,0 +1,15 @@
+import { useEffect, useState } from 'react'
+import { CheckCircle2, Heart, LoaderCircle, LockKeyhole, Send, Sparkles } from 'lucide-react'
+import { useParams } from '../lib/router'
+import { api } from '../lib/api'
+import { Badge, Button, Card, Logo } from '../components/ui'
+
+export function HeroPage() {
+  const token = useParams().token!; const [data, setData] = useState<any>(null); const [responses, setResponses] = useState<Record<string, string>>({}); const [loading, setLoading] = useState(true); const [sending, setSending] = useState(false); const [done, setDone] = useState(false); const [error, setError] = useState('')
+  useEffect(() => { api.questionnaire(token).then(result => { setData(result); setResponses(Object.fromEntries(result.items.map((item: any) => [item.id, item.response || '']))); if (result.status === 'completed') setDone(true) }).catch(err => setError(err.message)).finally(() => setLoading(false)) }, [token])
+  const submit = async (e: React.FormEvent) => { e.preventDefault(); setSending(true); try { await api.submitQuestionnaire(token, responses); setDone(true) } catch (err) { setError(err instanceof Error ? err.message : 'Не удалось сохранить ответы') } finally { setSending(false) } }
+  if (loading) return <div className="center-screen"><LoaderCircle className="spin" /><p>Открываем вашу анкету…</p></div>
+  if (error && !data) return <div className="center-screen"><h1>Ссылка не работает</h1><p>{error}</p></div>
+  if (done) return <main className="hero-form-page"><Logo /><Card className="hero-thanks"><div className="heart-badge"><Heart /></div><Badge tone="success"><CheckCircle2 size={14} /> Ответы сохранены</Badge><h1>Спасибо, {data.hero_name}!</h1><p>Организатор уже получил ваши ответы. Теперь можно расслабиться — сюрпризы начнутся на празднике.</p><small>Ссылку можно открыть ещё раз, если захотите изменить ответы.</small><Button variant="secondary" onClick={() => setDone(false)}>Изменить ответы</Button></Card></main>
+  return <main className="hero-form-page"><header><Logo /><span><LockKeyhole /> Приватная анкета</span></header><section className="hero-form-intro"><Badge tone="accent"><Sparkles size={14} /> Только для вас</Badge><h1>{data.hero_name}, расскажите немного о себе</h1><p>Из ответов получится тёплая викторина для «{data.event_title}». Правильных ответов здесь нет — важны ваши истории.</p></section><form onSubmit={submit} className="hero-questionnaire">{data.items.map((item: any, index: number) => <Card key={item.id}><span className="hero-q-number">{String(index + 1).padStart(2, '0')}</span><label><b>{item.text}</b><textarea rows={3} value={responses[item.id] || ''} onChange={e => setResponses({ ...responses, [item.id]: e.target.value })} placeholder="Ваш ответ…" /></label></Card>)}{error && <p className="form-error">{error}</p>}<Button type="submit" disabled={sending || Object.values(responses).every(value => !value.trim())}>{sending ? <LoaderCircle className="spin" /> : <Send />} Отправить организатору</Button><small><LockKeyhole /> Ответы увидит только организатор</small></form></main>
+}

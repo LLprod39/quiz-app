@@ -1,0 +1,10 @@
+{
+  "name": "Quiz App",
+  "short_name": "Quiz App",
+  "description": "Праздничная викторина для своих",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111120",
+  "theme_color": "#ff6b6b",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

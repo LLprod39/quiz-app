@@ -1,0 +1,56 @@
+name: celebration-quiz-lan
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-quiz}
+      POSTGRES_USER: ${POSTGRES_USER:-quiz}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quiz-lan-only}
+    volumes:
+      - quiz_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-quiz} -d ${POSTGRES_DB:-quiz}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: ../apps/api
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-quiz}:${POSTGRES_PASSWORD:-quiz-lan-only}@db:5432/${POSTGRES_DB:-quiz}
+      SECRET_KEY: ${SECRET_KEY:-local-development-key-change-me}
+      ORGANIZER_EMAIL: ${ORGANIZER_EMAIL:-organizer@example.local}
+      ORGANIZER_PASSWORD: ${ORGANIZER_PASSWORD:-celebrate}
+      DEPLOYMENT_MODE: lan
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
+      MEDIA_DIR: /data/media
+    volumes:
+      - quiz_media:/data/media
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build: ../apps/web
+    depends_on:
+      api:
+        condition: service_healthy
+
+  proxy:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
+      - api
+
+volumes:
+  quiz_db:
+  quiz_media:

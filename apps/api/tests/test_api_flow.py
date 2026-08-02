@@ -282,6 +282,9 @@ def test_custom_quiz_pack_prompt_crud_and_install():
         assert "ровно 20" in prompt.json()["prompt"]
         assert "только один валидный JSON" in prompt.json()["prompt"]
         assert "Страны мира" in prompt.json()["prompt"]
+        assert "Никогда не оформляй ссылку как Markdown" in prompt.json()["prompt"]
+        assert '"confetti", "glow", "minimal" или "neon"' in prompt.json()["prompt"]
+        assert "нельзя писать \\) или \\(" in prompt.json()["prompt"]
 
         source_url = "https://www.un.org/en/about-us/member-states"
         pack = {
@@ -299,13 +302,13 @@ def test_custom_quiz_pack_prompt_crud_and_install():
             "disclaimer": "Факты проверены по официальным открытым источникам.",
             "sources": [{
                 "name": "United Nations",
-                "url": "https://www.un.org/",
-                "license": "UN Terms of Use",
-                "license_url": "https://www.un.org/en/about-us/terms-of-use",
+                "url": "[[https://www.un.org/](https://www.un.org/)](https://www.un.org/)",
+                "license": "UN Terms of Use. " + "Long but legitimate license description. " * 5,
+                "license_url": "[UN Terms](https://www.un.org/en/about-us/terms-of-use)",
             }],
-            "theme": {**seeded_event["theme"], "brand_name": "Страны мира", "logo_mark": "🌍", "theme_preset": "countries-world"},
+            "theme": {**seeded_event["theme"], "decor": "sigil-glow", "brand_name": "Страны мира", "logo_mark": "🌍", "theme_preset": "countries-world"},
             "questions": [
-                {"text": "Какая страна входит в ООН?", "correct_answer": "Канада", "wrong_answers": ["Атлантида", "Нарния", "Ваканда"], "explanation": "Канада является государством — членом ООН.", "source_urls": [source_url], "time_limit_seconds": 25},
+                {"text": "Какая страна входит в ООН?", "correct_answer": "Канада", "wrong_answers": ["Атлантида", "Нарния", "Ваканда"], "explanation": "Канада является государством — членом ООН.", "source_urls": [f"[[{source_url}]({source_url})]({source_url})"], "time_limit_seconds": 25},
                 {"text": "Какая страна расположена в Южной Америке?", "correct_answer": "Бразилия", "wrong_answers": ["Норвегия", "Япония", "Египет"], "explanation": "Бразилия находится в Южной Америке.", "source_urls": [source_url], "time_limit_seconds": 30},
                 {"text": "Столицей какой страны является Оттава?", "correct_answer": "Канада", "wrong_answers": ["Австралия", "Ирландия", "Австрия"], "explanation": "Оттава является столицей Канады.", "source_urls": [source_url], "time_limit_seconds": 35},
             ],
@@ -319,6 +322,10 @@ def test_custom_quiz_pack_prompt_crud_and_install():
         definition = client.get("/api/quiz-packs/countries-world/definition", headers=headers)
         assert definition.status_code == 200
         assert definition.json()["questions"][0]["correct_answer"] == "Канада"
+        assert definition.json()["sources"][0]["url"] == "https://www.un.org/"
+        assert definition.json()["sources"][0]["license_url"] == "https://www.un.org/en/about-us/terms-of-use"
+        assert definition.json()["questions"][0]["source_urls"] == [source_url]
+        assert definition.json()["theme"]["decor"] == "glow"
 
         pack["title"] = "Страны мира — обновлено"
         updated = client.put("/api/quiz-packs/countries-world/definition", headers=headers, json=pack)

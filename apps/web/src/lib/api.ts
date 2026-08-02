@@ -7,6 +7,50 @@ export class ApiError extends Error {
   constructor(status: number, message: string) { super(message); this.status = status }
 }
 
+type ValidationIssue = { loc?: Array<string | number>; msg?: string; type?: string }
+
+const fieldLabels: Record<string, string> = {
+  slug: 'Идентификатор шаблона', title: 'Название', topic: 'Тема', icon: 'Иконка', short_description: 'Краткое описание',
+  description: 'Описание', estimated_minutes: 'Длительность', difficulty: 'Сложность', game_mode: 'Режим игры', round_title: 'Название раунда',
+  disclaimer: 'Примечание', sources: 'Источники', source_urls: 'Ссылки вопроса', url: 'Ссылка источника', license: 'Лицензия',
+  license_url: 'Ссылка на лицензию', theme: 'Оформление', decor: 'Эффект оформления', questions: 'Вопросы', wrong_answers: 'Неверные ответы',
+}
+
+function issueLocation(issue: ValidationIssue): string {
+  const loc = (issue.loc || []).filter(part => part !== 'body')
+  const questionIndex = loc.findIndex(part => part === 'questions')
+  if (questionIndex >= 0 && typeof loc[questionIndex + 1] === 'number') {
+    const field = loc[questionIndex + 2]
+    return `Вопрос ${Number(loc[questionIndex + 1]) + 1}${typeof field === 'string' ? ` · ${fieldLabels[field] || field}` : ''}`
+  }
+  const sourceIndex = loc.findIndex(part => part === 'sources')
+  if (sourceIndex >= 0 && typeof loc[sourceIndex + 1] === 'number') {
+    const field = loc[sourceIndex + 2]
+    return `Источник ${Number(loc[sourceIndex + 1]) + 1}${typeof field === 'string' ? ` · ${fieldLabels[field] || field}` : ''}`
+  }
+  const field = [...loc].reverse().find(part => typeof part === 'string')
+  return typeof field === 'string' ? fieldLabels[field] || field : 'Данные шаблона'
+}
+
+function issueMessage(issue: ValidationIssue): string {
+  if (issue.type?.startsWith('url_')) return 'укажите обычную HTTPS-ссылку без Markdown-разметки'
+  if (issue.type === 'string_too_long') return 'текст слишком длинный'
+  if (issue.type === 'literal_error') return 'указано недопустимое значение'
+  if (issue.type === 'json_invalid') return 'JSON записан с ошибкой'
+  return (issue.msg || 'проверьте значение').replace(/^Value error,\s*/i, '')
+}
+
+export function formatApiErrorDetail(detail: unknown): string {
+  if (!Array.isArray(detail)) return typeof detail === 'string' ? detail : 'Ошибка запроса'
+  const lines = [...new Set(detail.map(raw => {
+    const issue = raw as ValidationIssue
+    return `${issueLocation(issue)}: ${issueMessage(issue)}`
+  }))]
+  const shown = lines.slice(0, 6)
+  if (lines.length > shown.length) shown.push(`И ещё ${lines.length - shown.length} ошибок.`)
+  return shown.join('\n') || 'Проверьте данные шаблона'
+}
+
 export async function fetchMicrosoftQuestionSpeech(code: string, questionId: string, signal?: AbortSignal) {
   const response = await fetch(`${API_BASE}/speech/sessions/${encodeURIComponent(code)}/questions/${encodeURIComponent(questionId)}`, { signal })
   if (!response.ok) return null
@@ -25,7 +69,7 @@ async function request<T>(path: string, options: RequestInit = {}, admin = false
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: 'Ошибка соединения' }))
     const detail = body.detail
-    const message = Array.isArray(detail) ? detail.map(item => item?.msg || String(item)).join('; ') : detail || 'Ошибка запроса'
+    const message = formatApiErrorDetail(detail)
     throw new ApiError(response.status, message)
   }
   return response.json()

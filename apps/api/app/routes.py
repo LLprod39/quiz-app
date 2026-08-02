@@ -25,6 +25,20 @@ from .security import create_admin_token, new_device_token, require_admin, token
 router = APIRouter(prefix="/api")
 
 
+def normalize_gpt_url(value: Any) -> Any:
+    """Turn common GPT Markdown links back into a plain URL before validation."""
+    if not isinstance(value, str):
+        return value
+    cleaned = value.strip().replace(r"\)", ")").replace(r"\(", "(")
+    candidates = re.findall(r"https?://[^\s\[\]<>\"']+", cleaned)
+    if not candidates:
+        return cleaned
+    candidate = candidates[-1].rstrip(".,;:")
+    while candidate.endswith(")") and candidate.count(")") > candidate.count("("):
+        candidate = candidate[:-1]
+    return candidate
+
+
 class LoginBody(BaseModel):
     email: str
     password: str
@@ -60,6 +74,21 @@ class ThemeBody(BaseModel):
     step_format: str = Field(default="Выберите формат и тему", max_length=100)
     step_join: str = Field(default="Игроки войдут по QR-коду", max_length=100)
     step_show: str = Field(default="Устройте настоящее шоу", max_length=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_decor_alias(cls, data: Any):
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        decor = normalized.get("decor")
+        if isinstance(decor, str):
+            alias = decor.strip().casefold()
+            for allowed in ("confetti", "glow", "minimal", "neon"):
+                if allowed in alias:
+                    normalized["decor"] = allowed
+                    break
+        return normalized
 
 
 class EventBody(BaseModel):
@@ -112,8 +141,18 @@ class PackPromptBody(BaseModel):
 class PackSourceBody(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     url: HttpUrl
-    license: str = Field(min_length=2, max_length=120)
+    license: str = Field(min_length=2, max_length=500)
     license_url: HttpUrl
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_markdown_urls(cls, data: Any):
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        normalized["url"] = normalize_gpt_url(normalized.get("url"))
+        normalized["license_url"] = normalize_gpt_url(normalized.get("license_url"))
+        return normalized
 
 
 class PackQuestionImportBody(BaseModel):
@@ -123,6 +162,17 @@ class PackQuestionImportBody(BaseModel):
     explanation: str = Field(min_length=5, max_length=1000)
     source_urls: list[HttpUrl] = Field(min_length=1, max_length=5)
     time_limit_seconds: int = Field(default=30, ge=10, le=120)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_markdown_urls(cls, data: Any):
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        source_urls = normalized.get("source_urls")
+        if isinstance(source_urls, list):
+            normalized["source_urls"] = [normalize_gpt_url(url) for url in source_urls]
+        return normalized
 
     @model_validator(mode="after")
     def validate_answers(self):
@@ -464,9 +514,12 @@ def create_quiz_pack_prompt(body: PackPromptBody, _: str = Depends(require_admin
 1. Используй веб-поиск и проверь каждый факт минимум по одному надёжному источнику. Предпочитай официальные сайты, международные организации, государственные и научные ресурсы, энциклопедии с редакционным контролем.
 2. Создай ровно {body.question_count} разных вопросов сложности «{body.difficulty}». Для каждого вопроса дай один правильный и ровно три правдоподобных неверных ответа.
 3. Формулировки вопросов и пояснений должны быть оригинальными. Не копируй готовые вопросы из коммерческих викторин.
-4. У каждого вопроса в source_urls должны быть прямые HTTPS-ссылки на страницы, подтверждающие именно этот факт. В sources перечисли все использованные сайты и реальные условия их использования или лицензии.
+4. У каждого вопроса в source_urls должны быть прямые HTTPS-ссылки на страницы, подтверждающие именно этот факт. В sources перечисли все использованные сайты и реальные условия их использования или лицензии. Поле license сделай кратким — не более 300 символов.
 5. Не используй спорные, быстро устаревающие или неоднозначные факты. Если факт зависит от даты, явно укажи дату в вопросе.
-6. Подбери уникальное оформление темы: читаемые контрастные HEX-цвета, короткие тексты и подходящий emoji.
+6. Подбери уникальное оформление темы: читаемые контрастные HEX-цвета, короткие тексты и подходящий emoji. В поле decor используй строго одно из четырёх значений: "confetti", "glow", "minimal" или "neon". Не придумывай другие значения и не добавляй к ним приставки.
+7. Все поля url, license_url и source_urls должны содержать только обычную строку, начинающуюся с https://. Никогда не оформляй ссылку как Markdown: запрещены [текст](https://...), [[https://...](https://...)](https://...), HTML-теги и ссылки с подписью.
+8. Не ставь обратный слеш перед круглыми скобками в ссылках: нельзя писать \\) или \\(. Если скобки входят в URL, используй их обычный или percent-encoded вид (%28 и %29).
+9. Перед ответом мысленно проверь результат строгим JSON-парсером: никаких недопустимых escape-последовательностей, запятых после последнего элемента и текста вне объекта.
 
 Верни только один валидный JSON-объект UTF-8. Никаких пояснений, Markdown-блоков, комментариев, Python, QUIZ_PACKS или вызовов _q. Все ключи и строки должны быть в двойных кавычках.
 

@@ -1,0 +1,21 @@
+from alembic import command
+from alembic.config import Config
+import sqlalchemy as sa
+from app.config import settings
+
+
+def test_host_control_migration_round_trip(tmp_path, monkeypatch):
+    database = tmp_path / "host-control.sqlite"
+    database_url = f"sqlite:///{database.as_posix()}"
+    config = Config("alembic.ini")
+    config.set_main_option("script_location", "migrations")
+    monkeypatch.setattr(settings, "database_url", database_url)
+
+    command.upgrade(config, "head")
+    command.downgrade(config, "0003")
+    command.upgrade(config, "head")
+
+    engine = sa.create_engine(database_url)
+    columns = {column["name"]: column for column in sa.inspect(engine).get_columns("events")}
+    assert columns["host_mode"]["nullable"] is False
+    assert columns["auto_advance_seconds"]["nullable"] is False

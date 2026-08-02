@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
 from .db import get_db
-from .game import MAX_QUESTIONS, bump_version, check_answer, generate_join_code, iso_utc, leaderboard, ordered_questions, recalculate_submissions, session_snapshot, utcnow
+from .game import MAX_QUESTIONS, auto_transition_deadline, bump_version, check_answer, generate_join_code, iso_utc, leaderboard, ordered_questions, recalculate_submissions, session_snapshot, utcnow
 from .models import (
     AnswerOption, AuditLog, DeviceTransfer, Event, GameSession, Participant, Question, Questionnaire,
     QuestionnaireItem, QuestionnaireResponse, Round, Submission, Team, uid,
@@ -67,6 +67,8 @@ class EventBody(BaseModel):
     hero_name: str = Field(default="", max_length=100)
     event_date: str = ""
     game_mode: Literal["individual", "team"] = "individual"
+    host_mode: Literal["auto", "manual"] = "auto"
+    auto_advance_seconds: int = Field(default=5, ge=2, le=30)
     allow_late_join: bool = True
     hero_photo_url: str | None = None
     theme: ThemeBody = Field(default_factory=ThemeBody)
@@ -81,6 +83,11 @@ class EventBody(BaseModel):
         if self.event_format == "battle" and not self.topic:
             raise ValueError("Укажите тему квиз-баттла")
         return self
+
+
+class HostControlBody(BaseModel):
+    host_mode: Literal["auto", "manual"] = "auto"
+    auto_advance_seconds: int = Field(default=5, ge=2, le=30)
 
 
 class PackInstallBody(BaseModel):
@@ -243,7 +250,8 @@ def serialize_event(event: Event) -> dict:
     return {
         "id": event.id, "title": event.title, "event_format": event.event_format, "topic": event.topic,
         "hero_name": event.hero_name, "event_date": event.event_date,
-        "status": event.status, "is_selected": event.is_selected, "game_mode": event.game_mode, "theme": normalize_theme(event.theme),
+        "status": event.status, "is_selected": event.is_selected, "game_mode": event.game_mode,
+        "host_mode": event.host_mode, "auto_advance_seconds": event.auto_advance_seconds, "theme": normalize_theme(event.theme),
         "hero_photo_url": event.hero_photo_url, "allow_late_join": event.allow_late_join,
         "created_at": iso_utc(event.created_at), "updated_at": iso_utc(event.updated_at),
         "question_count": len(questions), "active_session_code": active.join_code if active else None,
@@ -404,6 +412,32 @@ def update_event(event_id: str, body: EventBody, _: str = Depends(require_admin)
     db.add(AuditLog(action="event.updated", before=None, after=body.model_dump()))
     db.commit()
     event = db.scalar(event_query().where(Event.id == event_id))
+    return serialize_event(event)
+
+
+@router.put("/events/{event_id}/host-control")
+async def update_host_control(event_id: str, body: HostControlBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    event = db.scalar(event_query().where(Event.id == event_id))
+    if not event:
+        raise HTTPException(404, "Мероприятие не найдено")
+    before = {"host_mode": event.host_mode, "auto_advance_seconds": event.auto_advance_seconds}
+    event.host_mode = body.host_mode
+    event.auto_advance_seconds = body.auto_advance_seconds
+    active_session_ids = []
+    for session in event.sessions:
+        if session.status in {"finished", "archived"}:
+            continue
+        if session.status != "answering":
+            session.deadline_at = auto_transition_deadline(event, session.status, session.current_question)
+        session.state_version += 1
+        active_session_ids.append(session.id)
+    db.add(AuditLog(action="event.host_control.updated", before=before, after=body.model_dump()))
+    db.commit()
+    for session_id in active_session_ids:
+        session = db.scalar(session_query().where(GameSession.id == session_id).execution_options(populate_existing=True))
+        if session:
+            await broadcast_state(db, session)
+    event = db.scalar(event_query().where(Event.id == event_id).execution_options(populate_existing=True))
     return serialize_event(event)
 
 
@@ -733,23 +767,23 @@ async def game_action(code: str, body: ActionBody, _: str = Depends(require_admi
         if next_index >= len(questions):
             session.status = "finished"; session.finished_at = utcnow()
         else:
-            session.current_question_index = next_index; session.current_question_id = questions[next_index].id; session.status = "countdown"; session.deadline_at = None
+            session.current_question_index = next_index; session.current_question_id = questions[next_index].id; session.status = "countdown"; session.deadline_at = auto_transition_deadline(session.event, "countdown", questions[next_index])
             if not session.started_at: session.started_at = utcnow()
     elif action == "start":
         if session.status != "countdown": raise HTTPException(409, "Сначала подготовьте вопрос")
         session.status = "answering"; session.deadline_at = utcnow() + timedelta(seconds=session.current_question.time_limit_seconds)
     elif action == "lock":
         if session.status != "answering": raise HTTPException(409, "Ответы уже закрыты")
-        session.status = "review" if session.current_question.type == "text" else "locked"; session.deadline_at = None
+        session.status = "review" if session.current_question.type in {"text", "hero_choice"} else "locked"; session.deadline_at = auto_transition_deadline(session.event, session.status, session.current_question)
         recalculate_submissions(db, session, session.current_question)
     elif action == "reveal":
         if session.status not in {"locked", "review"}: raise HTTPException(409, "Сначала закройте ответы")
-        recalculate_submissions(db, session, session.current_question); session.status = "reveal"
+        recalculate_submissions(db, session, session.current_question); session.status = "reveal"; session.deadline_at = auto_transition_deadline(session.event, "reveal", session.current_question)
     elif action == "next":
         if session.status not in {"reveal", "cancelled"}: raise HTTPException(409, "Сначала раскройте или отмените вопрос")
         next_index = session.current_question_index + 1
         if next_index >= len(questions): session.status = "finished"; session.finished_at = utcnow()
-        else: session.current_question_index = next_index; session.current_question_id = questions[next_index].id; session.status = "countdown"; session.deadline_at = None
+        else: session.current_question_index = next_index; session.current_question_id = questions[next_index].id; session.status = "countdown"; session.deadline_at = auto_transition_deadline(session.event, "countdown", questions[next_index])
     elif action == "pause":
         if session.status != "answering": raise HTTPException(409, "Пауза доступна во время ответа")
         deadline = session.deadline_at.replace(tzinfo=timezone.utc) if session.deadline_at and session.deadline_at.tzinfo is None else session.deadline_at
@@ -760,7 +794,7 @@ async def game_action(code: str, body: ActionBody, _: str = Depends(require_admi
         session.status = "answering"; session.deadline_at = utcnow() + timedelta(milliseconds=session.paused_remaining_ms or 0)
     elif action == "cancel":
         if session.status not in {"countdown", "answering", "locked", "review"}: raise HTTPException(409, "Этот вопрос нельзя отменить")
-        db.execute(delete(Submission).where(Submission.session_id == session.id, Submission.question_id == session.current_question_id)); session.status = "cancelled"; session.deadline_at = None
+        db.execute(delete(Submission).where(Submission.session_id == session.id, Submission.question_id == session.current_question_id)); session.status = "cancelled"; session.deadline_at = auto_transition_deadline(session.event, "cancelled", session.current_question)
     elif action == "finish":
         recalculate_submissions(db, session); session.status = "finished"; session.finished_at = utcnow(); session.deadline_at = None
     else: raise HTTPException(400, "Неизвестная команда")
@@ -791,7 +825,10 @@ async def hero_choice(code: str, body: AnswerBody, db: Session = Depends(get_db)
     session = find_session(db, code); participant = find_participant(db, session, body.device_token)
     if participant.role != "hero" or not session.current_question or session.current_question.type != "hero_choice": raise HTTPException(403, "Сейчас нет выбора героя")
     if session.status not in {"locked", "review"}: raise HTTPException(409, "Гости ещё выбирают")
-    session.current_question.correct_answer = body.answer; session.state_version += 1; db.add(AuditLog(session_id=session.id, actor_id=participant.id, action="hero.choice.submit", after={"choice": body.answer})); db.commit()
+    session.current_question.correct_answer = body.answer
+    recalculate_submissions(db, session, session.current_question)
+    session.deadline_at = auto_transition_deadline(session.event, "reveal", session.current_question)
+    session.state_version += 1; db.add(AuditLog(session_id=session.id, actor_id=participant.id, action="hero.choice.submit", after={"choice": body.answer})); db.commit()
     session = find_session(db, code); await broadcast_state(db, session); return {"status": "accepted"}
 
 

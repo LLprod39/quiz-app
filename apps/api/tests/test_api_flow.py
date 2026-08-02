@@ -4,9 +4,13 @@ from pathlib import Path
 os.environ["DATABASE_URL"] = "sqlite:///./test_api_flow.db"
 
 from fastapi.testclient import TestClient
+from datetime import timedelta
 
 from app.main import app
-from app.db import engine
+from app.db import SessionLocal, engine
+from app.game import advance_expired_session, utcnow
+from app.models import GameSession
+from app.routes import session_query
 
 
 def test_vertical_game_flow():
@@ -32,6 +36,7 @@ def test_vertical_game_flow():
 
         prepared = client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "prepare"})
         assert prepared.json()["session"]["status"] == "countdown"
+        assert prepared.json()["session"]["deadline_at"] is not None
         question = prepared.json()["question"]
         started = client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "start"})
         assert started.json()["session"]["status"] == "answering"
@@ -47,6 +52,55 @@ def test_vertical_game_flow():
         private = client.get(f"/api/sessions/{code}?device_token={token}").json()["private_result"]
         assert private["is_correct"] is True
         assert private["rank"] == 1
+
+    engine.dispose()
+    if database.exists():
+        database.unlink()
+
+
+def test_auto_host_mode_advances_and_manual_mode_stops_transition_deadlines():
+    database = Path("test_api_flow.db")
+    engine.dispose()
+    if database.exists():
+        database.unlink()
+    with TestClient(app) as client:
+        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        event = client.get("/api/events", headers=headers).json()[0]
+        assert event["host_mode"] == "auto"
+        assert event["auto_advance_seconds"] == 5
+        opened = client.post(f"/api/events/{event['id']}/sessions", headers=headers).json()
+        code = opened["session"]["join_code"]
+        prepared = client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "prepare"}).json()
+        assert prepared["session"]["status"] == "countdown"
+
+        with SessionLocal() as db:
+            session = db.scalar(session_query().where(GameSession.join_code == code))
+            session.deadline_at = utcnow() - timedelta(seconds=1)
+            assert advance_expired_session(db, session)
+            assert session.status == "answering"
+            assert session.deadline_at is not None
+            session.deadline_at = utcnow() - timedelta(seconds=1)
+            assert advance_expired_session(db, session)
+            assert session.status == "locked"
+            assert session.deadline_at is not None
+            session.deadline_at = utcnow() - timedelta(seconds=1)
+            assert advance_expired_session(db, session)
+            assert session.status == "reveal"
+            assert session.deadline_at is not None
+            db.commit()
+
+        changed = client.put(
+            f"/api/events/{event['id']}/host-control",
+            headers=headers,
+            json={"host_mode": "manual", "auto_advance_seconds": 8},
+        )
+        assert changed.status_code == 200
+        assert changed.json()["host_mode"] == "manual"
+        assert changed.json()["auto_advance_seconds"] == 8
+        manual_snapshot = client.get(f"/api/sessions/{code}").json()
+        assert manual_snapshot["event"]["host_mode"] == "manual"
+        assert manual_snapshot["session"]["deadline_at"] is None
 
     engine.dispose()
     if database.exists():

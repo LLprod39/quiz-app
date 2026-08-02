@@ -3,7 +3,7 @@ import secrets
 import string
 import hashlib
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, update
@@ -91,6 +91,66 @@ def recalculate_submissions(db: Session, session: GameSession, question: Questio
             for row in rows:
                 row.is_correct = check_answer(current, row.answer_payload)
     db.flush()
+
+
+def auto_transition_deadline(event: Event, status: str, question: Question | None = None, now: datetime | None = None) -> datetime | None:
+    """Schedule a non-answer screen only when organizer auto mode permits it."""
+    if event.host_mode != "auto" or status not in {"countdown", "locked", "review", "reveal", "cancelled"}:
+        return None
+    # The hero must make the decisive choice before the reveal can advance.
+    if status in {"locked", "review"} and question and question.type == "hero_choice":
+        return None
+    return (now or utcnow()) + timedelta(seconds=event.auto_advance_seconds)
+
+
+def advance_expired_session(db: Session, session: GameSession, now: datetime | None = None) -> bool:
+    """Advance one expired session deadline and return whether state changed."""
+    if not session.deadline_at:
+        return False
+    current_time = now or utcnow()
+    deadline = session.deadline_at
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=timezone.utc)
+    if deadline > current_time:
+        return False
+
+    questions = ordered_questions(session.event)
+    question = session.current_question
+    if session.status == "answering":
+        if question:
+            recalculate_submissions(db, session, question)
+        session.status = "review" if question and question.type in {"text", "hero_choice"} else "locked"
+        session.deadline_at = auto_transition_deadline(session.event, session.status, question, current_time)
+    elif session.event.host_mode != "auto":
+        session.deadline_at = None
+    elif session.status == "countdown":
+        if not question:
+            session.status = "finished"
+            session.finished_at = current_time
+            session.deadline_at = None
+        else:
+            session.status = "answering"
+            session.deadline_at = current_time + timedelta(seconds=question.time_limit_seconds)
+    elif session.status in {"locked", "review"}:
+        if question:
+            recalculate_submissions(db, session, question)
+        session.status = "reveal"
+        session.deadline_at = auto_transition_deadline(session.event, "reveal", question, current_time)
+    elif session.status in {"reveal", "cancelled"}:
+        next_index = session.current_question_index + 1
+        if next_index >= len(questions):
+            session.status = "finished"
+            session.finished_at = current_time
+            session.deadline_at = None
+        else:
+            session.current_question_index = next_index
+            session.current_question_id = questions[next_index].id
+            session.status = "countdown"
+            session.deadline_at = auto_transition_deadline(session.event, "countdown", questions[next_index], current_time)
+    else:
+        session.deadline_at = None
+    session.state_version += 1
+    return True
 
 
 def leaderboard(db: Session, session: GameSession) -> list[dict]:
@@ -194,6 +254,8 @@ def session_snapshot(db: Session, session: GameSession, participant: Participant
             "hero_name": session.event.hero_name,
             "hero_photo_url": session.event.hero_photo_url,
             "game_mode": session.event.game_mode,
+            "host_mode": session.event.host_mode,
+            "auto_advance_seconds": session.event.auto_advance_seconds,
             "theme": session.event.theme,
         },
         "question": public_question(session.current_question, reveal),

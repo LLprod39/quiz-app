@@ -9,13 +9,14 @@ from sqlalchemy.orm import selectinload
 
 from .config import settings
 from .db import Base, SessionLocal, engine
-from .game import recalculate_submissions, session_snapshot, utcnow
+from .game import advance_expired_session, session_snapshot, utcnow
 from .models import Event, GameSession, Participant, Question, Round
 from .rate_limit import RateLimitMiddleware
 from .realtime import hub
 from .routes import router, session_query
 from .security import token_hash
 from .seed import seed_demo
+from .speech import router as speech_router
 
 
 @asynccontextmanager
@@ -27,16 +28,11 @@ async def lifespan(_: FastAPI):
         while True:
             await asyncio.sleep(.5)
             with SessionLocal() as db:
-                ids = db.scalars(select(GameSession.id).where(GameSession.status == "answering", GameSession.deadline_at.is_not(None), GameSession.deadline_at <= utcnow())).all()
+                ids = db.scalars(select(GameSession.id).where(GameSession.deadline_at.is_not(None), GameSession.deadline_at <= utcnow())).all()
                 for session_id in ids:
                     session = db.scalar(session_query().where(GameSession.id == session_id).execution_options(populate_existing=True))
-                    if not session or session.status != "answering":
+                    if not session or not advance_expired_session(db, session):
                         continue
-                    session.status = "review" if session.current_question and session.current_question.type == "text" else "locked"
-                    session.deadline_at = None
-                    session.state_version += 1
-                    if session.current_question:
-                        recalculate_submissions(db, session, session.current_question)
                     db.commit()
                     session = db.scalar(session_query().where(GameSession.id == session_id).execution_options(populate_existing=True))
                     await hub.broadcast(session.join_code, session_snapshot(db, session))
@@ -59,6 +55,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(router)
+app.include_router(speech_router)
 app.mount("/media", StaticFiles(directory=settings.media_path), name="media")
 
 

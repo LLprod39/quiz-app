@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     media_dir: str = "./media"
     cors_origins: str = "http://localhost:5173,http://localhost"
     max_upload_mb: int = 25
+    azure_speech_key: str = ""
+    azure_speech_region: str = ""
+    azure_speech_voice: str = "ru-RU-SvetlanaNeural"
+    azure_speech_timeout_seconds: float = 8.0
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     @property

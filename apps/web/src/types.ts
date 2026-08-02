@@ -32,7 +32,7 @@ export interface EventData {
   id: string; title: string; event_format: 'celebration' | 'battle'; topic: string
   hero_name: string; event_date: string; status: string; is_selected: boolean
   created_at?: string | null; updated_at?: string | null
-  game_mode: string; theme: ThemeConfig
+  game_mode: string; host_mode: 'auto' | 'manual'; auto_advance_seconds: number; theme: ThemeConfig
   hero_photo_url?: string | null; allow_late_join: boolean; question_count: number
   active_session_code?: string | null; latest_session_code?: string | null
   sessions: { id: string; join_code: string; status: string; participant_count: number; started_at?: string | null; finished_at?: string | null }[]
@@ -44,6 +44,6 @@ export interface Ranking { id: string; name: string; avatar: string; color?: str
 export interface Snapshot {
   type: string; version: number; server_time: string
   session: { id: string; join_code: string; status: GameStatus; deployment_mode: string; current_question_index: number; question_count: number; deadline_at?: string | null; answered_count: number }
-  event: { id: string; title: string; event_format: 'celebration' | 'battle'; topic: string; hero_name: string; hero_photo_url?: string; game_mode: string; theme: ThemeConfig }
+  event: { id: string; title: string; event_format: 'celebration' | 'battle'; topic: string; hero_name: string; hero_photo_url?: string; game_mode: string; host_mode: 'auto' | 'manual'; auto_advance_seconds: number; theme: ThemeConfig }
   question?: Question | null; participants: Participant[]; teams: Team[]; private_result?: Ranking | null; leaderboard: Ranking[]
 }

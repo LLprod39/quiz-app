@@ -34,6 +34,9 @@ services:
       DEPLOYMENT_MODE: cloud
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       MEDIA_DIR: /data/media
+      AZURE_SPEECH_KEY: ${AZURE_SPEECH_KEY:-}
+      AZURE_SPEECH_REGION: ${AZURE_SPEECH_REGION:-}
+      AZURE_SPEECH_VOICE: ${AZURE_SPEECH_VOICE:-ru-RU-SvetlanaNeural}
     volumes:
       - quiz_media:/data/media
     depends_on:

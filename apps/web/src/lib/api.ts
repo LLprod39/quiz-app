@@ -7,6 +7,15 @@ export class ApiError extends Error {
   constructor(status: number, message: string) { super(message); this.status = status }
 }
 
+export async function fetchMicrosoftQuestionSpeech(code: string, questionId: string, signal?: AbortSignal) {
+  const response = await fetch(`${API_BASE}/speech/sessions/${encodeURIComponent(code)}/questions/${encodeURIComponent(questionId)}`, { signal })
+  if (!response.ok) return null
+  return {
+    audio: await response.blob(),
+    voice: response.headers.get('X-Speech-Voice') || 'Microsoft Speech',
+  }
+}
+
 async function request<T>(path: string, options: RequestInit = {}, admin = false): Promise<T> {
   const token = localStorage.getItem('admin_token')
   const headers = new Headers(options.headers)
@@ -30,6 +39,7 @@ export const api = {
   createEvent: (data: unknown) => request<EventData>('/events', { method: 'POST', body: JSON.stringify(data) }, true),
   selectEvent: (id: string) => request<EventData>(`/events/${id}/select`, { method: 'POST' }, true),
   updateEvent: (id: string, data: Partial<EventData>) => request<EventData>(`/events/${id}`, { method: 'PUT', body: JSON.stringify(data) }, true),
+  updateHostControl: (id: string, data: Pick<EventData, 'host_mode' | 'auto_advance_seconds'>) => request<EventData>(`/events/${id}/host-control`, { method: 'PUT', body: JSON.stringify(data) }, true),
   archiveEvent: (id: string) => request<{ status: string; selected_event_id?: string | null }>(`/events/${id}/archive`, { method: 'POST' }, true),
   restoreEvent: (id: string) => request<EventData>(`/events/${id}/restore`, { method: 'POST' }, true),
   addQuestionnaireItem: (eventId: string, text: string) => request(`/events/${eventId}/questionnaire/items`, { method: 'POST', body: JSON.stringify({ text, type: 'text' }) }, true),

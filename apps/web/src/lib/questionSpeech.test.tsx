@@ -64,6 +64,7 @@ describe('question speech', () => {
   })
 
   afterEach(() => {
+    vi.restoreAllMocks()
     vi.unstubAllGlobals()
     window.localStorage.clear()
   })
@@ -80,8 +81,8 @@ describe('question speech', () => {
 
     await waitFor(() => expect(speak).toHaveBeenCalledTimes(1))
     const firstUtterance = speak.mock.calls[0][0] as MockUtterance
-    expect(firstUtterance.text).toContain('Кто первым полетел в космос?')
-    expect(firstUtterance.text).toContain('A. Юрий Гагарин.')
+    expect(firstUtterance.text).toBe('Кто первым полетел в космос?')
+    expect(firstUtterance.text).not.toContain('Юрий Гагарин')
     expect(firstUtterance.voice).toBe(russianVoice)
     expect(window.localStorage.getItem(QUESTION_SPEECH_STORAGE_KEY)).toBe('true')
 
@@ -109,6 +110,58 @@ describe('question speech', () => {
     await waitFor(() => expect(speak).toHaveBeenCalledTimes(1))
   })
 
+  it('uses Microsoft audio from the server before the local browser fallback', async () => {
+    const play = vi.fn().mockResolvedValue(undefined)
+    const pause = vi.fn()
+    class MockAudio {
+      onended: (() => void) | null = null
+      onerror: (() => void) | null = null
+      play = play
+      pause = pause
+    }
+    const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(['audio']), {
+      status: 200,
+      headers: { 'X-Speech-Voice': 'ru-RU-SvetlanaNeural' },
+    }))
+    vi.stubGlobal('Audio', MockAudio)
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:microsoft-speech')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    const { result, unmount } = renderHook(() => useQuestionSpeech({
+      sessionId: 'session-cloud',
+      sessionCode: 'ABC123',
+      status: 'answering',
+      question: question('q-cloud'),
+    }))
+
+    act(() => result.current.setEnabled(true))
+    await waitFor(() => expect(result.current.provider).toBe('microsoft'))
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/speech/sessions/ABC123/questions/q-cloud', expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(play).toHaveBeenCalledTimes(1)
+    expect(speak).not.toHaveBeenCalled()
+    expect(result.current.voiceName).toBe('ru-RU-SvetlanaNeural')
+    unmount()
+    expect(pause).toHaveBeenCalled()
+  })
+
+  it('falls back to local Web Speech when Microsoft is not configured', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { result } = renderHook(() => useQuestionSpeech({
+      sessionId: 'session-fallback',
+      sessionCode: 'ABC123',
+      status: 'answering',
+      question: question('q-fallback'),
+    }))
+
+    act(() => result.current.setEnabled(true))
+    await waitFor(() => expect(speak).toHaveBeenCalledTimes(1))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect((speak.mock.calls[0][0] as MockUtterance).text).toBe('Кто первым полетел в космос?')
+  })
+
   it('stays safe when the browser has no speech synthesis API', () => {
     vi.stubGlobal('SpeechSynthesisUtterance', undefined)
     vi.stubGlobal('speechSynthesis', undefined)
@@ -117,12 +170,12 @@ describe('question speech', () => {
     expect(result.current.supported).toBe(false)
     expect(result.current.enabled).toBe(false)
     expect(result.current.canRepeat).toBe(false)
-    expect(result.current.repeat()).toBe(false)
+    expect(result.current.repeat()).toBeUndefined()
   })
 
   it('formats options and prefers a local Russian voice', () => {
     const remoteRussian = voice('Remote Russian', 'ru-RU', false, true)
     expect(selectRussianVoice([remoteRussian, russianVoice])).toBe(russianVoice)
-    expect(questionSpeechText(question('q-1'))).toBe('Кто первым полетел в космос? Варианты ответа. A. Юрий Гагарин. B. Нил Армстронг.')
+    expect(questionSpeechText(question('q-1'))).toBe('Кто первым полетел в космос?')
   })
 })

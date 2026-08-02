@@ -10,7 +10,7 @@ import { useQuestionSpeech } from '../lib/questionSpeech'
 
 export function ScreenPage() {
   const code = useParams().code!.toUpperCase(); const snapshot = useGameStore(s => s.snapshot); const connection = useGameStore(s => s.connection); const latency = useGameStore(s => s.latency); const [showTable, setShowTable] = useState(false)
-  const speech = useQuestionSpeech({ sessionId: snapshot?.session.id, status: snapshot?.session.status, question: snapshot?.question })
+  const speech = useQuestionSpeech({ sessionId: snapshot?.session.id, sessionCode: code, status: snapshot?.session.status, question: snapshot?.question })
   useEffect(() => { useGameStore.getState().connect(code); const key = (e: KeyboardEvent) => { if (e.key.toLowerCase() === 'f') void toggleFull() }; window.addEventListener('keydown', key); return () => { window.removeEventListener('keydown', key); useGameStore.getState().disconnect() } }, [code])
   useEffect(() => { if (snapshot?.session.status === 'finished') { setShowTable(false); const timer = window.setTimeout(() => setShowTable(true), 4500); return () => clearTimeout(timer) } }, [snapshot?.session.status])
   const toggleFull = async () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()
@@ -27,7 +27,7 @@ function QuestionSpeechControls({ speech }: { speech: ReturnType<typeof useQuest
   const detail = !speech.supported
     ? 'Браузер не поддерживает речь'
     : speech.enabled
-      ? speech.voiceName || 'Системный русский голос'
+      ? speech.provider === 'microsoft' ? `Microsoft · ${speech.voiceName || 'русский голос'}` : speech.voiceName || 'Локальный русский голос'
       : 'Включить для новых вопросов'
   return <div className="screen-tts-controls" aria-label="Озвучка вопросов">
     <button className={`screen-tts-toggle ${speech.enabled ? 'is-enabled' : ''} ${speech.speaking ? 'is-speaking' : ''}`} type="button" role="switch" aria-checked={speech.enabled} disabled={!speech.supported} onClick={() => speech.setEnabled(!speech.enabled)}>

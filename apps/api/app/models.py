@@ -26,6 +26,8 @@ class Event(Base):
     status: Mapped[str] = mapped_column(String(24), default="draft")
     is_selected: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     game_mode: Mapped[str] = mapped_column(String(16), default="individual")
+    host_mode: Mapped[str] = mapped_column(String(16), default="auto", server_default="auto", nullable=False)
+    auto_advance_seconds: Mapped[int] = mapped_column(Integer, default=5, server_default="5", nullable=False)
     theme: Mapped[dict] = mapped_column(JSON, default=lambda: {"accent": "#ff6b6b", "mode": "dark", "decor": "confetti"})
     hero_photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     allow_late_join: Mapped[bool] = mapped_column(Boolean, default=True)

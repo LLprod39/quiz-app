@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { GameStatus, Question } from '../types'
+import { fetchMicrosoftQuestionSpeech } from './api'
 
 export const QUESTION_SPEECH_STORAGE_KEY = 'quiz-app.screen.question-speech'
 
 interface QuestionSpeechOptions {
   sessionId?: string
+  sessionCode?: string
   status?: GameStatus
   question?: Question | null
 }
@@ -35,51 +37,105 @@ export function selectRussianVoice(voices: SpeechSynthesisVoice[]) {
 }
 
 export function questionSpeechText(question: Question) {
-  const parts = [question.text.trim()]
-  if (question.options.length) {
-    parts.push('Варианты ответа.')
-    question.options.forEach((option, index) => {
-      parts.push(`${String.fromCharCode(65 + index)}. ${option.text.trim()}.`)
-    })
-  }
-  return parts.filter(Boolean).join(' ')
+  return question.text.trim()
 }
 
-export function useQuestionSpeech({ sessionId, status, question }: QuestionSpeechOptions) {
-  const supported = typeof window !== 'undefined'
+export function useQuestionSpeech({ sessionId, sessionCode, status, question }: QuestionSpeechOptions) {
+  const browserSupported = typeof window !== 'undefined'
     && 'speechSynthesis' in window
+    && Boolean(window.speechSynthesis)
     && typeof SpeechSynthesisUtterance !== 'undefined'
+  const audioSupported = typeof Audio !== 'undefined'
+    && typeof URL !== 'undefined'
+    && typeof URL.createObjectURL === 'function'
+  const supported = browserSupported || (audioSupported && Boolean(sessionCode))
   const [enabled, setEnabledState] = useState(savedPreference)
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
   const [speaking, setSpeaking] = useState(false)
+  const [provider, setProvider] = useState<'microsoft' | 'browser' | null>(null)
+  const [providerVoice, setProviderVoice] = useState<string | null>(null)
   const spokenQuestions = useRef(new Set<string>())
   const currentUtterance = useRef<SpeechSynthesisUtterance | null>(null)
+  const currentAudio = useRef<{ element: HTMLAudioElement; url: string } | null>(null)
+  const currentRequest = useRef<AbortController | null>(null)
+  const playbackAttempt = useRef(0)
   const activeKey = status === 'answering' && question ? `${sessionId || 'session'}:${question.id}` : null
   const voice = useMemo(() => selectRussianVoice(voices), [voices])
 
   useEffect(() => {
-    if (!supported) return
+    if (!browserSupported) return
     const synthesis = window.speechSynthesis
     const refreshVoices = () => setVoices(synthesis.getVoices())
     refreshVoices()
     synthesis.addEventListener('voiceschanged', refreshVoices)
     return () => synthesis.removeEventListener('voiceschanged', refreshVoices)
-  }, [supported])
+  }, [browserSupported])
 
-  const cancel = useCallback(() => {
-    if (!supported) return
+  const cancel = useCallback((updateState = true) => {
+    playbackAttempt.current += 1
+    currentRequest.current?.abort()
+    currentRequest.current = null
+    if (currentAudio.current) {
+      currentAudio.current.element.onended = null
+      currentAudio.current.element.onerror = null
+      currentAudio.current.element.pause()
+      URL.revokeObjectURL(currentAudio.current.url)
+      currentAudio.current = null
+    }
     currentUtterance.current = null
-    window.speechSynthesis.cancel()
-    setSpeaking(false)
-  }, [supported])
+    if (browserSupported) window.speechSynthesis.cancel()
+    if (updateState) setSpeaking(false)
+  }, [browserSupported])
 
-  const speak = useCallback((repeat = false) => {
+  const speak = useCallback(async (repeat = false) => {
     if (!supported || !question || !activeKey) return false
     if (!repeat && spokenQuestions.current.has(activeKey)) return false
+    cancel()
+    const attempt = playbackAttempt.current
+    if (!repeat) spokenQuestions.current.add(activeKey)
 
+    if (audioSupported && sessionCode) {
+      const controller = new AbortController()
+      currentRequest.current = controller
+      try {
+        const result = await fetchMicrosoftQuestionSpeech(sessionCode, question.id, controller.signal)
+        currentRequest.current = null
+        if (attempt !== playbackAttempt.current) return false
+        if (result) {
+          const url = URL.createObjectURL(result.audio)
+          const audio = new Audio(url)
+          currentAudio.current = { element: audio, url }
+          const finish = () => {
+            if (currentAudio.current?.element === audio) {
+              URL.revokeObjectURL(url)
+              currentAudio.current = null
+              setSpeaking(false)
+            }
+          }
+          audio.onended = finish
+          audio.onerror = finish
+          try {
+            await audio.play()
+            if (attempt !== playbackAttempt.current || currentAudio.current?.element !== audio) return false
+            setProvider('microsoft')
+            setProviderVoice(result.voice)
+            setSpeaking(true)
+            return true
+          } catch {
+            finish()
+          }
+        }
+      } catch (error) {
+        currentRequest.current = null
+        if (controller.signal.aborted || attempt !== playbackAttempt.current) return false
+      }
+    }
+
+    if (!browserSupported || attempt !== playbackAttempt.current) {
+      if (!repeat) spokenQuestions.current.delete(activeKey)
+      return false
+    }
     const synthesis = window.speechSynthesis
-    currentUtterance.current = null
-    synthesis.cancel()
     const utterance = new SpeechSynthesisUtterance(questionSpeechText(question))
     utterance.lang = voice?.lang || 'ru-RU'
     utterance.rate = 0.95
@@ -87,7 +143,11 @@ export function useQuestionSpeech({ sessionId, status, question }: QuestionSpeec
     utterance.volume = 1
     if (voice) utterance.voice = voice
     utterance.onstart = () => {
-      if (currentUtterance.current === utterance) setSpeaking(true)
+      if (currentUtterance.current === utterance) {
+        setProvider('browser')
+        setProviderVoice(voice?.name || null)
+        setSpeaking(true)
+      }
     }
     const finish = () => {
       if (currentUtterance.current === utterance) {
@@ -98,7 +158,6 @@ export function useQuestionSpeech({ sessionId, status, question }: QuestionSpeec
     utterance.onend = finish
     utterance.onerror = finish
     currentUtterance.current = utterance
-    if (!repeat) spokenQuestions.current.add(activeKey)
     try {
       synthesis.speak(utterance)
       return true
@@ -108,19 +167,15 @@ export function useQuestionSpeech({ sessionId, status, question }: QuestionSpeec
       if (!repeat) spokenQuestions.current.delete(activeKey)
       return false
     }
-  }, [activeKey, question, supported, voice])
+  }, [activeKey, audioSupported, browserSupported, cancel, question, sessionCode, supported, voice])
 
   useEffect(() => {
-    if (!supported) return
     setSpeaking(false)
-    return () => {
-      currentUtterance.current = null
-      window.speechSynthesis.cancel()
-    }
-  }, [activeKey, supported])
+    return () => cancel(false)
+  }, [activeKey, cancel])
 
   useEffect(() => {
-    if (enabled && activeKey) speak(false)
+    if (enabled && activeKey) void speak(false)
   }, [activeKey, enabled, speak])
 
   const setEnabled = useCallback((next: boolean) => {
@@ -135,8 +190,9 @@ export function useQuestionSpeech({ sessionId, status, question }: QuestionSpeec
     enabled: supported && enabled,
     speaking,
     canRepeat: supported && enabled && Boolean(activeKey),
-    voiceName: voice?.name || null,
+    provider,
+    voiceName: providerVoice || voice?.name || null,
     setEnabled,
-    repeat: () => speak(true),
+    repeat: () => { void speak(true) },
   }
 }

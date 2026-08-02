@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from './lib/router'
 import App from './App'
 import { useGameStore } from './store/game'
+import { BrandingProvider } from './lib/branding'
 import './styles.css'
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
@@ -29,5 +30,5 @@ window.render_game_to_text = () => {
 window.advanceTime = ms => window.dispatchEvent(new CustomEvent('game-time-advance', { detail: ms }))
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
-  <BrowserRouter><App /></BrowserRouter>,
+  <BrandingProvider><BrowserRouter><App /></BrowserRouter></BrandingProvider>,
 )

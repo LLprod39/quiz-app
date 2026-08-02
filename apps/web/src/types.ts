@@ -11,10 +11,19 @@ export interface Question {
 export interface Round { id: string; title: string; sort_order: number; questions: Question[] }
 export interface QuestionnaireItem { id: string; text: string; type: string; sort_order: number; response: string }
 export interface Questionnaire { id: string; event_id: string; public_token: string; public_url: string; status: string; items: QuestionnaireItem[] }
+export interface ThemeConfig {
+  accent: string; secondary: string; background: string; panel: string; panel_2: string
+  text: string; muted: string; mode: 'dark'; decor: 'confetti' | 'glow' | 'minimal' | 'neon'
+  theme_preset: string; brand_name: string; brand_tagline: string; logo_mark: string
+  landing_eyebrow: string; landing_title: string; landing_highlight: string; landing_description: string
+  organizer_link_label: string; join_code_label: string; join_button_label: string
+  trust_no_registration: string; trust_players: string; trust_offline: string
+  step_format: string; step_join: string; step_show: string
+}
 export interface EventData {
   id: string; title: string; event_format: 'celebration' | 'battle'; topic: string
   hero_name: string; event_date: string; status: string
-  game_mode: string; theme: { accent: string; mode: string; decor: string }
+  game_mode: string; theme: ThemeConfig
   hero_photo_url?: string | null; allow_late_join: boolean; question_count: number
   active_session_code?: string | null; latest_session_code?: string | null
   sessions: { id: string; join_code: string; status: string; participant_count: number; started_at?: string | null; finished_at?: string | null }[]
@@ -26,6 +35,6 @@ export interface Ranking { id: string; name: string; avatar: string; color?: str
 export interface Snapshot {
   type: string; version: number; server_time: string
   session: { id: string; join_code: string; status: GameStatus; deployment_mode: string; current_question_index: number; question_count: number; deadline_at?: string | null; answered_count: number }
-  event: { id: string; title: string; event_format: 'celebration' | 'battle'; topic: string; hero_name: string; hero_photo_url?: string; game_mode: string; theme: { accent: string; mode: string; decor: string } }
+  event: { id: string; title: string; event_format: 'celebration' | 'battle'; topic: string; hero_name: string; hero_photo_url?: string; game_mode: string; theme: ThemeConfig }
   question?: Question | null; participants: Participant[]; teams: Team[]; private_result?: Ranking | null; leaderboard: Ranking[]
 }

@@ -27,6 +27,38 @@ class LoginBody(BaseModel):
     password: str
 
 
+class ThemeBody(BaseModel):
+    accent: str = "#ff6b6b"
+    secondary: str = "#8b5cf6"
+    background: str = "#111120"
+    panel: str = "#1a1a2b"
+    panel_2: str = "#222237"
+    text: str = "#f7f2eb"
+    muted: str = "#aaa8b7"
+    mode: Literal["dark"] = "dark"
+    decor: Literal["confetti", "glow", "minimal", "neon"] = "confetti"
+    theme_preset: str = "coral-night"
+    brand_name: str = Field(default="Quiz App", min_length=1, max_length=60)
+    brand_tagline: str = Field(default="викторина для своих", max_length=100)
+    logo_mark: str = Field(default="QA", min_length=1, max_length=4)
+    landing_eyebrow: str = Field(default="Любой повод. Любая тема. Одна игра.", max_length=160)
+    landing_title: str = Field(default="Создайте квиз,", min_length=1, max_length=120)
+    landing_highlight: str = Field(default="который запомнят", max_length=120)
+    landing_description: str = Field(
+        default="Праздник о близком человеке или тематический квиз-баттл о кино, музыке, спорте и чём угодно. Игроки отвечают с телефонов, а игра оживает на большом экране.",
+        max_length=500,
+    )
+    organizer_link_label: str = Field(default="Организатору", max_length=60)
+    join_code_label: str = Field(default="Код комнаты", max_length=60)
+    join_button_label: str = Field(default="Войти в игру", max_length=60)
+    trust_no_registration: str = Field(default="Без регистрации", max_length=80)
+    trust_players: str = Field(default="До 100+ игроков", max_length=80)
+    trust_offline: str = Field(default="Работает без интернета", max_length=80)
+    step_format: str = Field(default="Выберите формат и тему", max_length=100)
+    step_join: str = Field(default="Игроки войдут по QR-коду", max_length=100)
+    step_show: str = Field(default="Устройте настоящее шоу", max_length=100)
+
+
 class EventBody(BaseModel):
     title: str = Field(min_length=2, max_length=160)
     event_format: Literal["celebration", "battle"] = "celebration"
@@ -36,7 +68,7 @@ class EventBody(BaseModel):
     game_mode: Literal["individual", "team"] = "individual"
     allow_late_join: bool = True
     hero_photo_url: str | None = None
-    theme: dict = Field(default_factory=lambda: {"accent": "#ff6b6b", "mode": "dark", "decor": "confetti"})
+    theme: ThemeBody = Field(default_factory=ThemeBody)
 
     @model_validator(mode="after")
     def validate_format_details(self):
@@ -185,6 +217,14 @@ def serialize_question(question: Question) -> dict:
     }
 
 
+def normalize_theme(theme: dict | None) -> dict:
+    raw = theme or {}
+    normalized = ThemeBody(**raw).model_dump()
+    if "theme_preset" not in raw and raw.get("accent", "#ff6b6b").lower() != "#ff6b6b":
+        normalized["theme_preset"] = "custom"
+    return normalized
+
+
 def serialize_event(event: Event) -> dict:
     questions = ordered_questions(event)
     def session_time(item: GameSession) -> float:
@@ -197,7 +237,7 @@ def serialize_event(event: Event) -> dict:
     return {
         "id": event.id, "title": event.title, "event_format": event.event_format, "topic": event.topic,
         "hero_name": event.hero_name, "event_date": event.event_date,
-        "status": event.status, "game_mode": event.game_mode, "theme": event.theme,
+        "status": event.status, "game_mode": event.game_mode, "theme": normalize_theme(event.theme),
         "hero_photo_url": event.hero_photo_url, "allow_late_join": event.allow_late_join,
         "question_count": len(questions), "active_session_code": active.join_code if active else None,
         "latest_session_code": ordered_sessions[0].join_code if ordered_sessions else None,
@@ -240,6 +280,18 @@ async def broadcast_state(db: Session, session: GameSession) -> None:
 def health(db: Session = Depends(get_db)):
     db.scalar(select(func.count()).select_from(Event))
     return {"status": "ok", "mode": settings.deployment_mode, "server_time": utcnow().isoformat()}
+
+
+@router.get("/branding")
+def public_branding(db: Session = Depends(get_db)):
+    event = db.scalar(
+        select(Event)
+        .where(Event.status.notin_(["archived", "finished"]))
+        .order_by(Event.updated_at.desc())
+    )
+    if not event:
+        event = db.scalar(select(Event).order_by(Event.updated_at.desc()))
+    return normalize_theme(event.theme) if event else ThemeBody().model_dump()
 
 
 @router.post("/auth/login")

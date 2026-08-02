@@ -1,8 +1,10 @@
 import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode } from 'react'
 import { Check, Cloud, LoaderCircle, Wifi, WifiOff } from 'lucide-react'
+import { useBranding } from '../lib/branding'
 
 export function Logo({ compact = false }: { compact?: boolean }) {
-  return <div className="logo"><span className="logo-mark">QA</span>{!compact && <span>Quiz App<small>викторина для своих</small></span>}</div>
+  const { branding } = useBranding()
+  return <div className="logo"><span className="logo-mark">{branding.logo_mark}</span>{!compact && <span>{branding.brand_name}<small>{branding.brand_tagline}</small></span>}</div>
 }
 
 export function Button({ className = '', variant = 'primary', children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'ghost' | 'danger' }) {

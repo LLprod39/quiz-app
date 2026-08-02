@@ -106,3 +106,45 @@ def test_thematic_battle_has_no_hero_features():
     engine.dispose()
     if database.exists():
         database.unlink()
+
+
+def test_public_branding_follows_active_event():
+    database = Path("test_api_flow.db")
+    engine.dispose()
+    if database.exists():
+        database.unlink()
+    with TestClient(app) as client:
+        defaults = client.get("/api/branding")
+        assert defaults.status_code == 200
+        assert defaults.json()["brand_name"] == "Quiz App"
+        assert defaults.json()["landing_title"] == "Создайте квиз,"
+
+        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        event = client.get("/api/events", headers=headers).json()[0]
+        updated = client.put(
+            f"/api/events/{event['id']}",
+            headers=headers,
+            json={
+                "title": event["title"],
+                "event_format": event["event_format"],
+                "topic": event["topic"],
+                "hero_name": event["hero_name"],
+                "event_date": event["event_date"],
+                "game_mode": event["game_mode"],
+                "allow_late_join": event["allow_late_join"],
+                "hero_photo_url": event["hero_photo_url"],
+                "theme": {**event["theme"], "brand_name": "Свои знают", "logo_mark": "СЗ", "accent": "#34d399"},
+            },
+        )
+        assert updated.status_code == 200
+
+        branding = client.get("/api/branding")
+        assert branding.status_code == 200
+        assert branding.json()["brand_name"] == "Свои знают"
+        assert branding.json()["logo_mark"] == "СЗ"
+        assert branding.json()["accent"] == "#34d399"
+
+    engine.dispose()
+    if database.exists():
+        database.unlink()

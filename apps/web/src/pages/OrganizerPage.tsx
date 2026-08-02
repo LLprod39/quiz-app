@@ -4,15 +4,17 @@ import { Link } from '../lib/router'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, ApiError } from '../lib/api'
 import { createId } from '../lib/id'
+import { DEFAULT_BRANDING, THEME_PRESETS, useBranding } from '../lib/branding'
 import { useGameStore } from '../store/game'
-import type { EventData, Question, QuestionnaireItem, Snapshot } from '../types'
+import type { EventData, Question, QuestionnaireItem, Snapshot, ThemeConfig } from '../types'
 import { Badge, Button, Card, ConnectionPill, Empty, Field, Logo, SaveState, formatTime } from '../components/ui'
 import { Timer } from '../components/Timer'
 
-type Tab = 'overview' | 'questionnaire' | 'editor' | 'rehearsal' | 'live' | 'history'
+type Tab = 'overview' | 'settings' | 'questionnaire' | 'editor' | 'rehearsal' | 'live' | 'history'
 
 const nav: { id: Tab; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Главная', icon: LayoutDashboard },
+  { id: 'settings', label: 'Оформление', icon: Settings2 },
   { id: 'questionnaire', label: 'Анкета героя', icon: ClipboardList },
   { id: 'editor', label: 'Вопросы', icon: CircleHelp },
   { id: 'rehearsal', label: 'Репетиция', icon: Gauge },
@@ -63,6 +65,7 @@ export function OrganizerPage() {
 
   const logout = () => { localStorage.removeItem('admin_token'); setAuthenticated(false) }
   const eventNav = nav.filter(item => event.event_format === 'celebration' || item.id !== 'questionnaire')
+  const mobileNav = eventNav.filter(item => ['overview', 'settings', 'editor', 'live', 'history'].includes(item.id))
   const openRoom = async () => {
     try { const snap = await api.openSession(event.id); setSession(snap); useGameStore.getState().connect(snap.session.join_code); setTab('live') }
     catch (err) { setError(err instanceof Error ? err.message : 'Не удалось открыть комнату') }
@@ -79,13 +82,14 @@ export function OrganizerPage() {
       {error && <div className="error-banner">{error}<button onClick={() => setError('')}>×</button></div>}
       <main className="admin-content">
         {tab === 'overview' && <Overview event={event} session={session} onOpen={openRoom} onTab={setTab} onChanged={load} />}
+        {tab === 'settings' && <SettingsPanel event={event} onChanged={load} />}
         {tab === 'questionnaire' && event.questionnaire && <QuestionnairePanel event={event} onChanged={load} />}
         {tab === 'editor' && <EditorPanel event={event} onChanged={load} />}
         {tab === 'rehearsal' && <RehearsalPanel event={event} session={session} onOpen={openRoom} />}
         {tab === 'live' && <LivePanel event={event} session={session} onOpen={openRoom} />}
         {tab === 'history' && <ResultsPanel session={session} />}
       </main>
-      <nav className="mobile-tabs">{eventNav.slice(0, 5).map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={20} /><span>{item.label}</span></button>)}</nav>
+      <nav className="mobile-tabs">{mobileNav.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={20} /><span>{item.label}</span></button>)}</nav>
     </div>
   </div>
 }
@@ -131,6 +135,75 @@ function Overview({ event, session, onOpen, onTab, onChanged }: { event: EventDa
     <div className="stats-grid"><Card><span className="metric-icon coral"><CircleHelp /></span><div><strong>{event.question_count}<small>/ 15</small></strong><span>вопросов готово</span></div><button onClick={() => onTab('editor')}>Редактировать <ChevronRight /></button></Card>{event.event_format === 'celebration' ? <Card><span className="metric-icon purple"><ClipboardList /></span><div><strong>{event.questionnaire?.status === 'completed' ? 'Готова' : 'Ждём'}</strong><span>анкета героя</span></div><button onClick={() => onTab('questionnaire')}>Открыть <ChevronRight /></button></Card> : <Card><span className="metric-icon purple"><Gamepad2 /></span><div><strong>Баттл</strong><span>{event.topic}</span></div><button onClick={() => setEditing(true)}>Настроить <ChevronRight /></button></Card>}<Card><span className="metric-icon mint"><Users /></span><div><strong>{session?.participants.length || 0}</strong><span>игроков в комнате</span></div><button onClick={() => onTab('live')}>Посмотреть <ChevronRight /></button></Card></div>
     <div className="overview-grid"><Card className="event-card"><div className="card-title"><div><span className="overline">Карточка события</span><h3>{event.title}</h3></div><div className="event-card-actions"><button className="icon-button" title="Редактировать" onClick={() => setEditing(!editing)}><Pencil size={18} /></button><button className="icon-button danger-icon" title="Архивировать" onClick={() => void archive()} disabled={saving}><Archive size={18} /></button></div></div>{editing ? <div className="form-grid"><Field label="Формат"><select value={form.event_format} onChange={e => setForm({ ...form, event_format: e.target.value as EventData['event_format'] })}><option value="celebration">Праздник о человеке</option><option value="battle">Тематический квиз-баттл</option></select></Field><Field label="Название"><input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} /></Field>{form.event_format === 'celebration' ? <Field label="Имя героя"><input value={form.hero_name} onChange={e => setForm({ ...form, hero_name: e.target.value })} /></Field> : <Field label="Тема баттла"><input value={form.topic} onChange={e => setForm({ ...form, topic: e.target.value })} placeholder="Кино, музыка, спорт…" /></Field>}<Field label="Дата"><input type="date" value={form.event_date} onChange={e => setForm({ ...form, event_date: e.target.value })} /></Field><Field label="Режим"><select value={form.game_mode} onChange={e => setForm({ ...form, game_mode: e.target.value })}><option value="individual">Личный</option><option value="team">Командный</option></select></Field><Field label="Акцентный цвет"><input type="color" value={form.theme.accent} onChange={e => setForm({ ...form, theme: { ...form.theme, accent: e.target.value } })} /></Field><label className="check-row"><input type="checkbox" checked={form.allow_late_join} onChange={e => setForm({ ...form, allow_late_join: e.target.checked })} /><span><b>Разрешить поздний вход</b><small>Игрок начнёт со следующего вопроса</small></span></label><div className="form-actions"><Button variant="ghost" onClick={() => setEditing(false)}>Отмена</Button><Button onClick={() => void save()} disabled={saving || !form.title.trim() || (form.event_format === 'celebration' ? !form.hero_name.trim() : !form.topic.trim())}><Save size={17} /> Сохранить</Button></div></div> : <><div className="event-hero-preview"><div className="event-initial">{(event.event_format === 'battle' ? event.topic : event.hero_name).slice(0, 1)}</div><div><span>{event.event_format === 'battle' ? 'Тема квиз-баттла' : 'Герой праздника'}</span><b>{event.event_format === 'battle' ? event.topic : event.hero_name}</b><small>{event.event_date ? new Date(event.event_date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Дата не указана'}</small></div></div><div className="event-meta"><span><Gamepad2 /> {event.game_mode === 'team' ? 'Командная игра' : 'Личная игра'}</span><span><Wifi /> Поздний вход {event.allow_late_join ? 'включён' : 'выключен'}</span></div></>}</Card>
       <Card className="readiness-card"><div className="card-title"><div><span className="overline">Готовность</span><h3>До старта — три шага</h3></div><b>{progress}%</b></div><div className="progress-line"><i style={{ width: `${progress}%` }} /></div><button className="check-step done" onClick={() => event.event_format === 'celebration' ? onTab('questionnaire') : setEditing(true)}><Check /><span><b>Оформить мероприятие</b><small>{event.event_format === 'battle' ? 'Название, тема и режим готовы' : 'Имя, дата и тема готовы'}</small></span><ChevronRight /></button><button className={`check-step ${event.question_count >= 3 ? 'done' : ''}`} onClick={() => onTab('editor')}><Check /><span><b>Подготовить вопросы</b><small>{event.question_count} из 15 добавлено</small></span><ChevronRight /></button><button className="check-step" onClick={() => onTab('rehearsal')}><Check /><span><b>Провести репетицию</b><small>Экран, звук и телефоны</small></span><ChevronRight /></button></Card></div>
+  </div>
+}
+
+function SettingsPanel({ event, onChanged }: { event: EventData; onChanged: () => void }) {
+  const { refreshBranding } = useBranding()
+  const eventForm = () => ({
+    title: event.title,
+    event_format: event.event_format,
+    topic: event.topic,
+    hero_name: event.hero_name,
+    event_date: event.event_date,
+    game_mode: event.game_mode,
+    allow_late_join: event.allow_late_join,
+    hero_photo_url: event.hero_photo_url,
+    theme: { ...DEFAULT_BRANDING, ...event.theme },
+  })
+  const [form, setForm] = useState(eventForm)
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { setForm(eventForm()) }, [event])
+
+  const updateTheme = <K extends keyof ThemeConfig>(key: K, value: ThemeConfig[K]) => {
+    setSaved(false)
+    setForm(current => ({ ...current, theme: { ...current.theme, [key]: value, ...(key === 'accent' || key === 'secondary' || key === 'background' || key === 'panel' || key === 'panel_2' || key === 'text' || key === 'muted' ? { theme_preset: 'custom' } : {}) } }))
+  }
+  const choosePreset = (preset: typeof THEME_PRESETS[number]) => {
+    setSaved(false)
+    setForm(current => ({ ...current, theme: { ...current.theme, ...preset.colors, theme_preset: preset.id } }))
+  }
+  const reset = () => { setForm(eventForm()); setSaved(false); setError('') }
+  const resetTheme = () => { setForm(current => ({ ...current, theme: { ...current.theme, accent: DEFAULT_BRANDING.accent, secondary: DEFAULT_BRANDING.secondary, background: DEFAULT_BRANDING.background, panel: DEFAULT_BRANDING.panel, panel_2: DEFAULT_BRANDING.panel_2, text: DEFAULT_BRANDING.text, muted: DEFAULT_BRANDING.muted, mode: DEFAULT_BRANDING.mode, decor: DEFAULT_BRANDING.decor, theme_preset: DEFAULT_BRANDING.theme_preset } })); setSaved(false) }
+  const canSave = form.title.trim().length >= 2 && (form.event_format === 'celebration' ? Boolean(form.hero_name.trim()) : Boolean(form.topic.trim())) && Boolean(form.theme.brand_name.trim()) && Boolean(form.theme.logo_mark.trim()) && Boolean(form.theme.landing_title.trim())
+  const save = async () => {
+    if (!canSave) return
+    setBusy(true); setError(''); setSaved(false)
+    try {
+      await api.updateEvent(event.id, form as Partial<EventData>)
+      await refreshBranding()
+      onChanged()
+      setSaved(true)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить оформление')
+    } finally { setBusy(false) }
+  }
+  const previewStyle = {
+    '--accent': form.theme.accent,
+    '--secondary': form.theme.secondary,
+    '--bg': form.theme.background,
+    '--panel': form.theme.panel,
+    '--panel-2': form.theme.panel_2,
+    '--text': form.theme.text,
+    '--muted': form.theme.muted,
+  } as React.CSSProperties
+
+  return <div className="content-stack settings-page">
+    <section className="page-heading"><div><Badge tone="accent"><Settings2 size={14} /> Оформление</Badge><h2>Все тексты и тема — в одном месте</h2><p>Изменения сохраняются для главной страницы, панели организатора, телефонов игроков и большого экрана.</p></div><div className="settings-heading-actions"><Button variant="ghost" onClick={reset} disabled={busy}>Отменить изменения</Button><Button onClick={() => void save()} disabled={busy || !canSave}>{busy ? <LoaderCircle className="spin" size={18} /> : <Save size={18} />} Сохранить всё</Button></div></section>
+    {error && <p className="form-error">{error}</p>}
+    {saved && <div className="success-banner"><Check size={17} /> Оформление сохранено и уже применяется на всех страницах.</div>}
+    <div className="settings-layout">
+      <div className="settings-fields">
+        <Card className="settings-card"><div className="section-title"><div><span className="overline">Бренд</span><h3>Название и знак</h3></div><Badge tone="neutral">Шапка сайта</Badge></div><div className="form-grid"><Field label="Название проекта"><input required maxLength={60} value={form.theme.brand_name} onChange={e => updateTheme('brand_name', e.target.value)} placeholder="Свои знают" /></Field><Field label="Короткий знак" hint="До четырёх символов"><input required maxLength={4} value={form.theme.logo_mark} onChange={e => updateTheme('logo_mark', e.target.value.toUpperCase().slice(0, 4))} placeholder="СЗ" /></Field><Field label="Подпись под названием"><input maxLength={100} value={form.theme.brand_tagline} onChange={e => updateTheme('brand_tagline', e.target.value)} placeholder="викторина для своих" /></Field></div></Card>
+        <Card className="settings-card"><div className="section-title"><div><span className="overline">Главная страница</span><h3>Первый экран</h3></div></div><div className="form-grid"><Field label="Строка над заголовком"><input maxLength={160} value={form.theme.landing_eyebrow} onChange={e => updateTheme('landing_eyebrow', e.target.value)} /></Field><Field label="Основной заголовок"><input required maxLength={120} value={form.theme.landing_title} onChange={e => updateTheme('landing_title', e.target.value)} /></Field><Field label="Выделенная строка"><input maxLength={120} value={form.theme.landing_highlight} onChange={e => updateTheme('landing_highlight', e.target.value)} /></Field><Field label="Описание"><textarea rows={4} maxLength={500} value={form.theme.landing_description} onChange={e => updateTheme('landing_description', e.target.value)} /></Field></div></Card>
+        <Card className="settings-card"><div className="section-title"><div><span className="overline">Главная страница</span><h3>Кнопки, преимущества и шаги</h3></div></div><div className="form-grid"><Field label="Ссылка для организатора"><input maxLength={60} value={form.theme.organizer_link_label} onChange={e => updateTheme('organizer_link_label', e.target.value)} /></Field><Field label="Подпись к коду комнаты"><input maxLength={60} value={form.theme.join_code_label} onChange={e => updateTheme('join_code_label', e.target.value)} /></Field><Field label="Кнопка входа"><input maxLength={60} value={form.theme.join_button_label} onChange={e => updateTheme('join_button_label', e.target.value)} /></Field><Field label="Преимущество 1"><input maxLength={80} value={form.theme.trust_no_registration} onChange={e => updateTheme('trust_no_registration', e.target.value)} /></Field><Field label="Преимущество 2"><input maxLength={80} value={form.theme.trust_players} onChange={e => updateTheme('trust_players', e.target.value)} /></Field><Field label="Преимущество 3"><input maxLength={80} value={form.theme.trust_offline} onChange={e => updateTheme('trust_offline', e.target.value)} /></Field><Field label="Шаг 1"><input maxLength={100} value={form.theme.step_format} onChange={e => updateTheme('step_format', e.target.value)} /></Field><Field label="Шаг 2"><input maxLength={100} value={form.theme.step_join} onChange={e => updateTheme('step_join', e.target.value)} /></Field><Field label="Шаг 3"><input maxLength={100} value={form.theme.step_show} onChange={e => updateTheme('step_show', e.target.value)} /></Field></div></Card>
+        <Card className="settings-card"><div className="section-title"><div><span className="overline">Мероприятие</span><h3>Формат и параметры квиза</h3></div></div><div className="form-grid"><Field label="Название квиза"><input required minLength={2} maxLength={160} value={form.title} onChange={e => { setSaved(false); setForm({ ...form, title: e.target.value }) }} /></Field><Field label="Формат"><select value={form.event_format} onChange={e => { const event_format = e.target.value as EventData['event_format']; setSaved(false); setForm({ ...form, event_format, game_mode: event_format === 'battle' ? 'team' : form.game_mode }) }}><option value="celebration">Праздник о человеке</option><option value="battle">Тематический квиз-баттл</option></select></Field>{form.event_format === 'celebration' ? <Field label="Имя героя"><input required maxLength={100} value={form.hero_name} onChange={e => { setSaved(false); setForm({ ...form, hero_name: e.target.value }) }} /></Field> : <Field label="Тема баттла"><input required maxLength={160} value={form.topic} onChange={e => { setSaved(false); setForm({ ...form, topic: e.target.value }) }} placeholder="Кино, музыка, спорт…" /></Field>}<Field label="Дата"><input type="date" value={form.event_date} onChange={e => { setSaved(false); setForm({ ...form, event_date: e.target.value }) }} /></Field><Field label="Режим игры"><select value={form.game_mode} onChange={e => { setSaved(false); setForm({ ...form, game_mode: e.target.value }) }}><option value="individual">Личный</option><option value="team">Командный</option></select></Field><label className="check-row"><input type="checkbox" checked={form.allow_late_join} onChange={e => { setSaved(false); setForm({ ...form, allow_late_join: e.target.checked }) }} /><span><b>Разрешить поздний вход</b><small>Опоздавшие начнут со следующего вопроса</small></span></label></div></Card>
+        <Card className="settings-card theme-settings-card"><div className="section-title"><div><span className="overline">Визуальная тема</span><h3>Готовые стили</h3></div><Button variant="ghost" onClick={resetTheme}>Вернуть стандартную</Button></div><div className="theme-presets">{THEME_PRESETS.map(preset => <button key={preset.id} className={form.theme.theme_preset === preset.id ? 'active' : ''} onClick={() => choosePreset(preset)}><span className="theme-swatches"><i style={{ background: preset.colors.background }} /><i style={{ background: preset.colors.accent }} /><i style={{ background: preset.colors.secondary }} /></span><b>{preset.name}</b><small>{preset.description}</small>{form.theme.theme_preset === preset.id && <Check size={16} />}</button>)}</div><div className="color-grid">{([['accent', 'Акцент'], ['secondary', 'Второй цвет'], ['background', 'Фон'], ['panel', 'Карточки'], ['panel_2', 'Доп. панели'], ['text', 'Текст'], ['muted', 'Вторичный текст']] as [keyof ThemeConfig, string][]).map(([key, label]) => <label className="color-control" key={key}><span>{label}</span><div><input type="color" value={form.theme[key] as string} onChange={e => updateTheme(key, e.target.value as never)} /><code>{form.theme[key] as string}</code></div></label>)}</div><Field label="Декоративный стиль"><select value={form.theme.decor} onChange={e => updateTheme('decor', e.target.value as ThemeConfig['decor'])}><option value="confetti">Праздничный</option><option value="glow">Мягкое свечение</option><option value="neon">Неон</option><option value="minimal">Минимализм</option></select></Field></Card>
+      </div>
+      <aside className="settings-preview" style={previewStyle}><div className="preview-browser"><div className="preview-browser-bar"><i /><i /><i /><span>Предпросмотр</span></div><div className="preview-content"><div className="preview-logo"><span>{form.theme.logo_mark || 'QA'}</span><b>{form.theme.brand_name || 'Название'}<small>{form.theme.brand_tagline}</small></b></div><div className="preview-eyebrow">✦ {form.theme.landing_eyebrow}</div><h3>{form.theme.landing_title}<em>{form.theme.landing_highlight}</em></h3><p>{form.theme.landing_description}</p><button>{form.theme.join_button_label || 'Войти в игру'} <ChevronRight size={15} /></button><div className="preview-event"><small>{form.event_format === 'battle' ? 'Тематический баттл' : 'Праздничный квиз'}</small><b>{form.title || 'Название квиза'}</b><span>{form.event_format === 'battle' ? form.topic : form.hero_name}</span></div></div></div><small className="preview-hint">Предпросмотр обновляется сразу. На других устройствах тема изменится после сохранения.</small></aside>
+    </div>
   </div>
 }
 

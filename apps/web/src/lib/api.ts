@@ -1,4 +1,4 @@
-import type { EventData, Question, Snapshot } from '../types'
+import type { EventData, Question, Snapshot, ThemeConfig } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
@@ -21,6 +21,7 @@ async function request<T>(path: string, options: RequestInit = {}, admin = false
 }
 
 export const api = {
+  branding: () => request<ThemeConfig>('/branding'),
   login: (email: string, password: string) => request<{ access_token: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
   events: () => request<EventData[]>('/events', {}, true),
   createEvent: (data: unknown) => request<EventData>('/events', { method: 'POST', body: JSON.stringify(data) }, true),

@@ -53,6 +53,10 @@ pytest
 
 API документация доступна на `http://localhost:8000/docs`, healthcheck — `/api/health`.
 
+## Контрибьютеры
+
+- [TON618 (@DayMoonX)](https://github.com/DayMoonX)
+
 ## Лицензия
 
 Проект распространяется по лицензии [MIT](LICENSE).

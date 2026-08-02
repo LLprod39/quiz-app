@@ -119,10 +119,11 @@ describe('question speech', () => {
       play = play
       pause = pause
     }
-    const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(['audio']), {
-      status: 200,
-      headers: { 'X-Speech-Voice': 'ru-RU-SvetlanaNeural' },
-    }))
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: vi.fn().mockResolvedValue(new Blob(['audio'])),
+      headers: new Headers({ 'X-Speech-Voice': 'ru-RU-SvetlanaNeural' }),
+    })
     vi.stubGlobal('Audio', MockAudio)
     vi.stubGlobal('fetch', fetchMock)
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:microsoft-speech')

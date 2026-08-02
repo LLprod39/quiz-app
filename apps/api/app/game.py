@@ -188,6 +188,8 @@ def session_snapshot(db: Session, session: GameSession, participant: Participant
         "event": {
             "id": session.event.id,
             "title": session.event.title,
+            "event_format": session.event.event_format,
+            "topic": session.event.topic,
             "hero_name": session.event.hero_name,
             "hero_photo_url": session.event.hero_photo_url,
             "game_mode": session.event.game_mode,

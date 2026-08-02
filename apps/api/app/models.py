@@ -19,6 +19,8 @@ class Event(Base):
     __tablename__ = "events"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     title: Mapped[str] = mapped_column(String(160))
+    event_format: Mapped[str] = mapped_column(String(20), default="celebration", server_default="celebration")
+    topic: Mapped[str] = mapped_column(String(160), default="", server_default="")
     hero_name: Mapped[str] = mapped_column(String(100))
     event_date: Mapped[str] = mapped_column(String(20), default="")
     status: Mapped[str] = mapped_column(String(24), default="draft")

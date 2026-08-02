@@ -51,3 +51,49 @@ def test_vertical_game_flow():
     engine.dispose()
     if database.exists():
         database.unlink()
+
+
+def test_thematic_battle_has_no_hero_features():
+    database = Path("test_api_flow.db")
+    engine.dispose()
+    if database.exists():
+        database.unlink()
+    with TestClient(app) as client:
+        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
+        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        seeded_event = client.get("/api/events", headers=headers).json()[0]
+        assert client.post(f"/api/events/{seeded_event['id']}/archive", headers=headers).status_code == 200
+
+        created = client.post(
+            "/api/events",
+            headers=headers,
+            json={"title": "Битва киноманов", "event_format": "battle", "topic": "Кино 1990-х", "game_mode": "team"},
+        )
+        assert created.status_code == 200
+        event = created.json()
+        assert event["event_format"] == "battle"
+        assert event["topic"] == "Кино 1990-х"
+        assert event["hero_name"] == ""
+        assert event["questionnaire"] is None
+
+        hero_question = client.post(
+            f"/api/events/{event['id']}/questions",
+            headers=headers,
+            json={
+                "round_id": event["rounds"][0]["id"],
+                "type": "hero_choice",
+                "text": "Какой фильм выбирает герой?",
+                "options": [{"id": "a", "text": "Один дома"}, {"id": "b", "text": "Матрица"}],
+            },
+        )
+        assert hero_question.status_code == 400
+        questionnaire_item = client.post(
+            f"/api/events/{event['id']}/questionnaire/items",
+            headers=headers,
+            json={"text": "Личный вопрос"},
+        )
+        assert questionnaire_item.status_code == 400
+
+    engine.dispose()
+    if database.exists():
+        database.unlink()

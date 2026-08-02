@@ -55,7 +55,10 @@ export function JoinPage() {
     request_id: string;
     claim_token: string;
   } | null>(null);
-  const role = params.get("hero") === "1" ? "hero" : "guest";
+  const role =
+    params.get("hero") === "1" && snapshot?.event.event_format === "celebration"
+      ? "hero"
+      : "guest";
   const loadRoom = async (room = code) => {
     if (room.length < 4) return;
     setLoading(true);
@@ -204,12 +207,19 @@ export function JoinPage() {
           <form onSubmit={join}>
             <div className="event-welcome">
               <span className="event-initial small">
-                {snapshot.event.hero_name.slice(0, 1)}
+                {(snapshot.event.event_format === "battle"
+                  ? snapshot.event.topic
+                  : snapshot.event.hero_name
+                ).slice(0, 1)}
               </span>
               <div>
                 <small>Вы входите на</small>
                 <h1>{snapshot.event.title}</h1>
-                <p>Праздник в честь {snapshot.event.hero_name}</p>
+                <p>
+                  {snapshot.event.event_format === "battle"
+                    ? `Тематический квиз-баттл · ${snapshot.event.topic}`
+                    : `Праздник в честь ${snapshot.event.hero_name}`}
+                </p>
               </div>
             </div>
             <Field label="Как вас зовут?">

@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -29,12 +29,25 @@ class LoginBody(BaseModel):
 
 class EventBody(BaseModel):
     title: str = Field(min_length=2, max_length=160)
-    hero_name: str = Field(min_length=1, max_length=100)
+    event_format: Literal["celebration", "battle"] = "celebration"
+    topic: str = Field(default="", max_length=160)
+    hero_name: str = Field(default="", max_length=100)
     event_date: str = ""
-    game_mode: str = "individual"
+    game_mode: Literal["individual", "team"] = "individual"
     allow_late_join: bool = True
     hero_photo_url: str | None = None
     theme: dict = Field(default_factory=lambda: {"accent": "#ff6b6b", "mode": "dark", "decor": "confetti"})
+
+    @model_validator(mode="after")
+    def validate_format_details(self):
+        self.title = self.title.strip()
+        self.hero_name = self.hero_name.strip()
+        self.topic = self.topic.strip()
+        if self.event_format == "celebration" and not self.hero_name:
+            raise ValueError("Укажите имя героя праздника")
+        if self.event_format == "battle" and not self.topic:
+            raise ValueError("Укажите тему квиз-баттла")
+        return self
 
 
 class QuestionBody(BaseModel):
@@ -144,14 +157,15 @@ def serialize_event(event: Event) -> dict:
     ordered_sessions = sorted(event.sessions, key=session_time, reverse=True)
     active = next((s for s in ordered_sessions if s.status not in {"finished", "archived"}), None)
     return {
-        "id": event.id, "title": event.title, "hero_name": event.hero_name, "event_date": event.event_date,
+        "id": event.id, "title": event.title, "event_format": event.event_format, "topic": event.topic,
+        "hero_name": event.hero_name, "event_date": event.event_date,
         "status": event.status, "game_mode": event.game_mode, "theme": event.theme,
         "hero_photo_url": event.hero_photo_url, "allow_late_join": event.allow_late_join,
         "question_count": len(questions), "active_session_code": active.join_code if active else None,
         "latest_session_code": ordered_sessions[0].join_code if ordered_sessions else None,
         "sessions": [{"id": session.id, "join_code": session.join_code, "status": session.status, "participant_count": len(session.participants), "started_at": iso_utc(session.started_at), "finished_at": iso_utc(session.finished_at)} for session in ordered_sessions],
         "rounds": [{"id": r.id, "title": r.title, "sort_order": r.sort_order, "questions": [serialize_question(q) for q in r.questions]} for r in event.rounds],
-        "questionnaire": serialize_questionnaire(event.questionnaire) if event.questionnaire else None,
+        "questionnaire": serialize_questionnaire(event.questionnaire) if event.event_format == "celebration" and event.questionnaire else None,
     }
 
 
@@ -210,11 +224,12 @@ def create_event(body: EventBody, _: str = Depends(require_admin), db: Session =
     event = Event(**body.model_dump(), status="draft")
     round_ = Round(title="Раунд 1", sort_order=0)
     event.rounds.append(round_)
-    event.questionnaire = Questionnaire(items=[
-        QuestionnaireItem(text="Какое блюдо вы можете есть снова и снова?", sort_order=0),
-        QuestionnaireItem(text="Какое место связано с самым тёплым воспоминанием?", sort_order=1),
-        QuestionnaireItem(text="Какую песню друзья сразу связывают с вами?", sort_order=2),
-    ])
+    if body.event_format == "celebration":
+        event.questionnaire = Questionnaire(items=[
+            QuestionnaireItem(text="Какое блюдо вы можете есть снова и снова?", sort_order=0),
+            QuestionnaireItem(text="Какое место связано с самым тёплым воспоминанием?", sort_order=1),
+            QuestionnaireItem(text="Какую песню друзья сразу связывают с вами?", sort_order=2),
+        ])
     db.add(event); db.commit()
     event = db.scalar(event_query().where(Event.id == event.id))
     return serialize_event(event)
@@ -229,9 +244,17 @@ def get_event(event_id: str, _: str = Depends(require_admin), db: Session = Depe
 
 @router.put("/events/{event_id}")
 def update_event(event_id: str, body: EventBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
-    event = db.get(Event, event_id)
+    event = db.scalar(event_query().where(Event.id == event_id))
     if not event: raise HTTPException(404, "Мероприятие не найдено")
+    if body.event_format == "battle" and any(question.type == "hero_choice" for question in ordered_questions(event)):
+        raise HTTPException(400, "Сначала удалите вопросы типа «Выбор героя»")
     for key, value in body.model_dump().items(): setattr(event, key, value)
+    if body.event_format == "celebration" and not event.questionnaire:
+        event.questionnaire = Questionnaire(items=[
+            QuestionnaireItem(text="Какое блюдо вы можете есть снова и снова?", sort_order=0),
+            QuestionnaireItem(text="Какое место связано с самым тёплым воспоминанием?", sort_order=1),
+            QuestionnaireItem(text="Какую песню друзья сразу связывают с вами?", sort_order=2),
+        ])
     db.add(AuditLog(action="event.updated", before=None, after=body.model_dump()))
     db.commit()
     event = db.scalar(event_query().where(Event.id == event_id))
@@ -250,6 +273,8 @@ def archive_event(event_id: str, _: str = Depends(require_admin), db: Session = 
 def add_questionnaire_item(event_id: str, body: QuestionnaireItemBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
     event = db.scalar(event_query().where(Event.id == event_id))
     if not event: raise HTTPException(404, "Мероприятие не найдено")
+    if event.event_format != "celebration":
+        raise HTTPException(400, "Анкета доступна только для персонального праздника")
     if not event.questionnaire:
         event.questionnaire = Questionnaire()
     item = QuestionnaireItem(text=body.text, type=body.type, sort_order=len(event.questionnaire.items))
@@ -294,6 +319,8 @@ def questionnaire_to_question(item_id: str, _: str = Depends(require_admin), db:
 def create_question(event_id: str, body: QuestionBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
     event = db.scalar(event_query().where(Event.id == event_id))
     if not event: raise HTTPException(404, "Мероприятие не найдено")
+    if event.event_format == "battle" and body.type == "hero_choice":
+        raise HTTPException(400, "В тематическом баттле нет типа «Выбор героя»")
     if len(ordered_questions(event)) >= 15: raise HTTPException(400, "В викторине может быть не более 15 вопросов")
     round_ = next((r for r in event.rounds if r.id == body.round_id), None)
     if not round_:
@@ -317,6 +344,9 @@ def create_question(event_id: str, body: QuestionBody, _: str = Depends(require_
 def update_question(question_id: str, body: QuestionBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
     question = db.scalar(select(Question).options(selectinload(Question.options), selectinload(Question.round)).where(Question.id == question_id))
     if not question: raise HTTPException(404, "Вопрос не найден")
+    event = db.get(Event, question.round.event_id)
+    if event and event.event_format == "battle" and body.type == "hero_choice":
+        raise HTTPException(400, "В тематическом баттле нет типа «Выбор героя»")
     before = serialize_question(question)
     for key, value in body.model_dump(exclude={"round_id", "round_title", "options"}).items(): setattr(question, key, value)
     db.execute(delete(AnswerOption).where(AnswerOption.question_id == question.id))
@@ -368,6 +398,8 @@ def join_session(code: str, body: JoinBody, background_tasks: BackgroundTasks, d
     if same and not initial: raise HTTPException(409, "name_initial_required")
     if any(p.patronymic_initial == initial for p in same): raise HTTPException(409, "Такое имя и буква отчества уже заняты")
     if body.role not in {"guest", "hero"}: raise HTTPException(400, "Недопустимая роль")
+    if body.role == "hero" and session.event.event_format != "celebration":
+        raise HTTPException(400, "В тематическом баттле все входят как игроки")
     team = next((t for t in session.teams if t.id == body.team_id), None) if body.team_id else None
     if session.event.game_mode == "team" and not team: raise HTTPException(400, "Выберите команду")
     raw_token = new_device_token()

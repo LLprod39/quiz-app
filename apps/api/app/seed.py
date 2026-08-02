@@ -9,7 +9,7 @@ def seed_demo(db: Session) -> None:
     if db.scalar(select(Event)):
         return
     event = Event(
-        title="Вечер в честь Лены", hero_name="Лена", event_date="2026-08-08", status="draft",
+        title="Вечер в честь Лены", event_format="celebration", topic="", hero_name="Лена", event_date="2026-08-08", status="draft",
         theme={"accent": "#ff6b6b", "mode": "dark", "decor": "confetti"}, game_mode="individual",
     )
     event.questionnaire = Questionnaire(items=[

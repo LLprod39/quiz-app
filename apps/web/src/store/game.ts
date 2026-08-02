@@ -63,5 +63,5 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ socket })
   },
   refresh: async (code, token) => set({ snapshot: await api.snapshot(code, token) }),
-  disconnect: () => { get().socket?.close(); set({ socket: null, connection: 'offline' }) },
+  disconnect: () => { get().socket?.close(); set({ socket: null, snapshot: null, connection: 'offline', latency: null }) },
 }))

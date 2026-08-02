@@ -62,7 +62,6 @@ def test_thematic_battle_has_no_hero_features():
         login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
         seeded_event = client.get("/api/events", headers=headers).json()[0]
-        assert client.post(f"/api/events/{seeded_event['id']}/archive", headers=headers).status_code == 200
 
         created = client.post(
             "/api/events",
@@ -75,6 +74,10 @@ def test_thematic_battle_has_no_hero_features():
         assert event["topic"] == "Кино 1990-х"
         assert event["hero_name"] == ""
         assert event["questionnaire"] is None
+        assert event["is_selected"] is True
+        saved = client.get("/api/events", headers=headers).json()
+        assert {item["id"] for item in saved} >= {seeded_event["id"], event["id"]}
+        assert next(item for item in saved if item["id"] == seeded_event["id"])["status"] != "archived"
 
         hero_question = client.post(
             f"/api/events/{event['id']}/questions",
@@ -124,24 +127,49 @@ def test_quiz_pack_catalog_and_install():
 
         login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
         headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-        conflict = client.post("/api/quiz-packs/marvel-universe/install", headers=headers, json={"replace_active": False})
-        assert conflict.status_code == 409
-
-        installed = client.post("/api/quiz-packs/marvel-universe/install", headers=headers, json={"replace_active": True})
+        original = client.get("/api/events", headers=headers).json()[0]
+        installed = client.post("/api/quiz-packs/marvel-universe/install", headers=headers, json={"replace_active": False})
         assert installed.status_code == 200
         event = installed.json()
         assert event["title"] == "Marvel Quiz Battle"
         assert event["topic"] == "Marvel: герои и мультивселенная"
         assert event["game_mode"] == "team"
         assert event["question_count"] == 20
+        assert event["is_selected"] is True
         assert event["theme"]["logo_mark"] == "MV"
         assert all(question["correct_answer"] in {option["id"] for option in question["options"]} for question in event["rounds"][0]["questions"])
 
         events = client.get("/api/events", headers=headers).json()
-        assert sum(item["status"] == "archived" for item in events) >= 1
+        assert sum(item["is_selected"] for item in events) == 1
+        assert next(item for item in events if item["id"] == original["id"])["status"] != "archived"
+        assert next(item for item in events if item["id"] == original["id"])["is_selected"] is False
         opened = client.post(f"/api/events/{event['id']}/sessions", headers=headers)
         assert opened.status_code == 200
         assert opened.json()["session"]["question_count"] == 20
+        first_code = opened.json()["session"]["join_code"]
+        finished = client.post(f"/api/sessions/{first_code}/actions", headers=headers, json={"action": "finish"})
+        assert finished.status_code == 200
+        assert finished.json()["session"]["status"] == "finished"
+        assert client.get(f"/api/events/{event['id']}", headers=headers).json()["status"] == "ready"
+        replay = client.post(f"/api/events/{event['id']}/sessions", headers=headers)
+        assert replay.status_code == 200
+        assert replay.json()["session"]["join_code"] != first_code
+        replay_event = client.get(f"/api/events/{event['id']}", headers=headers).json()
+        assert replay_event["status"] == "ready"
+        assert len(replay_event["sessions"]) == 2
+
+        selected = client.post(f"/api/events/{original['id']}/select", headers=headers)
+        assert selected.status_code == 200
+        assert selected.json()["is_selected"] is True
+        assert client.get("/api/branding").json()["brand_name"] == original["theme"]["brand_name"]
+
+        archived = client.post(f"/api/events/{original['id']}/archive", headers=headers)
+        assert archived.status_code == 200
+        restored = client.post(f"/api/events/{original['id']}/restore", headers=headers)
+        assert restored.status_code == 200
+        assert restored.json()["status"] != "archived"
+        assert restored.json()["is_selected"] is True
+        assert restored.json()["question_count"] == original["question_count"]
 
     engine.dispose()
     if database.exists():

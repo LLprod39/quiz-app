@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { ArrowLeft, ArrowRight, Check, Clock3, ExternalLink, Gamepad2, Library, LoaderCircle, Palette, ShieldCheck } from 'lucide-react'
 import { Badge, Button, Card, Empty } from '../components/ui'
-import { api, ApiError } from '../lib/api'
+import { api } from '../lib/api'
 import { themeStyle, useBranding } from '../lib/branding'
 import { Link, useNavigate, useParams } from '../lib/router'
 import type { QuizPack } from '../types'
@@ -57,14 +57,7 @@ function QuizPackDetail({ pack }: { pack: QuizPack }) {
   const install = async () => {
     setInstalling(true); setError('')
     try {
-      try {
-        await api.installQuizPack(pack.slug)
-      } catch (err) {
-        if (!(err instanceof ApiError) || err.status !== 409) throw err
-        const confirmed = window.confirm('Сейчас есть активный квиз. Перенести его в архив и создать новый тематический квиз? История игр сохранится.')
-        if (!confirmed) return
-        await api.installQuizPack(pack.slug, true)
-      }
+      await api.installQuizPack(pack.slug)
       setInstalled(true)
       await refreshBranding()
       setTimeout(() => navigate('/admin'), 500)

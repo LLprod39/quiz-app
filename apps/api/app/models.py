@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -24,6 +24,7 @@ class Event(Base):
     hero_name: Mapped[str] = mapped_column(String(100))
     event_date: Mapped[str] = mapped_column(String(20), default="")
     status: Mapped[str] = mapped_column(String(24), default="draft")
+    is_selected: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false(), nullable=False)
     game_mode: Mapped[str] = mapped_column(String(16), default="individual")
     theme: Mapped[dict] = mapped_column(JSON, default=lambda: {"accent": "#ff6b6b", "mode": "dark", "decor": "confetti"})
     hero_photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)

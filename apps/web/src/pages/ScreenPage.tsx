@@ -1,19 +1,41 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Maximize, Music2, PartyPopper, Users, Volume2, Wifi } from 'lucide-react'
+import { Maximize, Music2, PartyPopper, RotateCcw, Users, Volume2, VolumeX, Wifi } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useParams } from '../lib/router'
 import { useGameStore } from '../store/game'
 import type { Snapshot } from '../types'
 import { ConnectionPill, Logo, formatTime } from '../components/ui'
 import { Timer } from '../components/Timer'
+import { useQuestionSpeech } from '../lib/questionSpeech'
 
 export function ScreenPage() {
   const code = useParams().code!.toUpperCase(); const snapshot = useGameStore(s => s.snapshot); const connection = useGameStore(s => s.connection); const latency = useGameStore(s => s.latency); const [showTable, setShowTable] = useState(false)
+  const speech = useQuestionSpeech({ sessionId: snapshot?.session.id, status: snapshot?.session.status, question: snapshot?.question })
   useEffect(() => { useGameStore.getState().connect(code); const key = (e: KeyboardEvent) => { if (e.key.toLowerCase() === 'f') void toggleFull() }; window.addEventListener('keydown', key); return () => { window.removeEventListener('keydown', key); useGameStore.getState().disconnect() } }, [code])
   useEffect(() => { if (snapshot?.session.status === 'finished') { setShowTable(false); const timer = window.setTimeout(() => setShowTable(true), 4500); return () => clearTimeout(timer) } }, [snapshot?.session.status])
   const toggleFull = async () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()
   if (!snapshot) return <main className="screen-shell"><div className="screen-loading"><span className="logo-mark">QA</span><p>Подключаем игровой экран…</p></div></main>
-  return <main className={`screen-shell decor-${snapshot.event.theme.decor}`} style={{ '--accent': snapshot.event.theme.accent } as React.CSSProperties}><div className="screen-glow" /><header className="screen-header"><Logo /><div><span>Комната</span><b>{code}</b></div><ConnectionPill state={connection} latency={latency} mode={snapshot.session.deployment_mode} /><button onClick={() => void toggleFull()}><Maximize /> Начать показ</button></header><ScreenState snapshot={snapshot} showTable={showTable} /><footer className="screen-footer"><span><Wifi /> Сервер — источник времени</span><span>{snapshot.event.title}</span><span><Volume2 /> Звук включён</span></footer></main>
+  return <main className={`screen-shell decor-${snapshot.event.theme.decor}`} style={{ '--accent': snapshot.event.theme.accent } as React.CSSProperties}><div className="screen-glow" /><header className="screen-header"><Logo /><div><span>Комната</span><b>{code}</b></div><ConnectionPill state={connection} latency={latency} mode={snapshot.session.deployment_mode} /><button onClick={() => void toggleFull()}><Maximize /> Начать показ</button></header><ScreenState snapshot={snapshot} showTable={showTable} /><footer className="screen-footer"><span><Wifi /> Сервер — источник времени</span><span>{snapshot.event.title}</span><QuestionSpeechControls speech={speech} /></footer></main>
+}
+
+function QuestionSpeechControls({ speech }: { speech: ReturnType<typeof useQuestionSpeech> }) {
+  const label = !speech.supported
+    ? 'Озвучка недоступна'
+    : speech.enabled
+      ? speech.speaking ? 'Озвучиваем вопрос' : 'Озвучка включена'
+      : 'Озвучка выключена'
+  const detail = !speech.supported
+    ? 'Браузер не поддерживает речь'
+    : speech.enabled
+      ? speech.voiceName || 'Системный русский голос'
+      : 'Включить для новых вопросов'
+  return <div className="screen-tts-controls" aria-label="Озвучка вопросов">
+    <button className={`screen-tts-toggle ${speech.enabled ? 'is-enabled' : ''} ${speech.speaking ? 'is-speaking' : ''}`} type="button" role="switch" aria-checked={speech.enabled} disabled={!speech.supported} onClick={() => speech.setEnabled(!speech.enabled)}>
+      {speech.enabled ? <Volume2 /> : <VolumeX />}
+      <span><b>{label}</b><small>{detail}</small></span>
+    </button>
+    <button className="screen-tts-repeat" type="button" aria-label="Повторить текущий вопрос" title="Повторить текущий вопрос" disabled={!speech.canRepeat} onClick={speech.repeat}><RotateCcw /></button>
+  </div>
 }
 
 function ScreenState({ snapshot, showTable }: { snapshot: Snapshot; showTable: boolean }) {

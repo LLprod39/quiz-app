@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
@@ -233,17 +233,19 @@ def normalize_theme(theme: dict | None) -> dict:
 def serialize_event(event: Event) -> dict:
     questions = ordered_questions(event)
     def session_time(item: GameSession) -> float:
-        if not item.started_at:
+        source = item.started_at or item.finished_at
+        if not source:
             return 0
-        value = item.started_at if item.started_at.tzinfo else item.started_at.replace(tzinfo=timezone.utc)
+        value = source if source.tzinfo else source.replace(tzinfo=timezone.utc)
         return value.timestamp()
-    ordered_sessions = sorted(event.sessions, key=session_time, reverse=True)
+    ordered_sessions = sorted(event.sessions, key=lambda item: (item.status not in {"finished", "archived"}, session_time(item)), reverse=True)
     active = next((s for s in ordered_sessions if s.status not in {"finished", "archived"}), None)
     return {
         "id": event.id, "title": event.title, "event_format": event.event_format, "topic": event.topic,
         "hero_name": event.hero_name, "event_date": event.event_date,
-        "status": event.status, "game_mode": event.game_mode, "theme": normalize_theme(event.theme),
+        "status": event.status, "is_selected": event.is_selected, "game_mode": event.game_mode, "theme": normalize_theme(event.theme),
         "hero_photo_url": event.hero_photo_url, "allow_late_join": event.allow_late_join,
+        "created_at": iso_utc(event.created_at), "updated_at": iso_utc(event.updated_at),
         "question_count": len(questions), "active_session_code": active.join_code if active else None,
         "latest_session_code": ordered_sessions[0].join_code if ordered_sessions else None,
         "sessions": [{"id": session.id, "join_code": session.join_code, "status": session.status, "participant_count": len(session.participants), "started_at": iso_utc(session.started_at), "finished_at": iso_utc(session.finished_at)} for session in ordered_sessions],
@@ -281,6 +283,11 @@ async def broadcast_state(db: Session, session: GameSession) -> None:
     await hub.broadcast(session.join_code, session_snapshot(db, session))
 
 
+def select_quiz(db: Session, event: Event) -> None:
+    db.execute(update(Event).where(Event.id != event.id).values(is_selected=False))
+    event.is_selected = True
+
+
 @router.get("/health")
 def health(db: Session = Depends(get_db)):
     db.scalar(select(func.count()).select_from(Event))
@@ -291,9 +298,11 @@ def health(db: Session = Depends(get_db)):
 def public_branding(db: Session = Depends(get_db)):
     event = db.scalar(
         select(Event)
-        .where(Event.status.notin_(["archived", "finished"]))
+        .where(Event.is_selected.is_(True), Event.status != "archived")
         .order_by(Event.updated_at.desc())
     )
+    if not event:
+        event = db.scalar(select(Event).where(Event.status != "archived").order_by(Event.updated_at.desc()))
     if not event:
         event = db.scalar(select(Event).order_by(Event.updated_at.desc()))
     return normalize_theme(event.theme) if event else ThemeBody().model_dump()
@@ -317,20 +326,9 @@ def install_quiz_pack(slug: str, body: PackInstallBody, _: str = Depends(require
     pack = PACKS_BY_SLUG.get(slug)
     if not pack:
         raise HTTPException(404, "Тематический квиз не найден")
-    active = db.scalar(event_query().where(Event.status.notin_(["archived", "finished"])))
-    if active and not body.replace_active:
-        raise HTTPException(409, "Сейчас есть активный квиз. Подтвердите его перенос в архив.")
-    if active:
-        active.status = "archived"
-        for session in active.sessions:
-            if session.status not in {"finished", "archived"}:
-                session.status = "archived"
-                session.finished_at = utcnow()
-                session.deadline_at = None
-
     event = Event(
         title=pack["title"], event_format="battle", topic=pack["topic"], hero_name="", event_date="",
-        status="draft", game_mode="team", allow_late_join=True, hero_photo_url=None,
+        status="draft", is_selected=True, game_mode="team", allow_late_join=True, hero_photo_url=None,
         theme=ThemeBody(**pack["theme"]).model_dump(),
     )
     round_ = Round(title=pack["round_title"], sort_order=0)
@@ -348,6 +346,7 @@ def install_quiz_pack(slug: str, body: PackInstallBody, _: str = Depends(require
         round_.questions.append(question)
     db.add(event)
     db.flush()
+    select_quiz(db, event)
     db.add(AuditLog(action="quiz_pack.installed", after={"event_id": event.id, "pack": slug, "question_count": len(pack["questions"])}))
     db.commit()
     event = db.scalar(event_query().where(Event.id == event.id))
@@ -368,10 +367,7 @@ def list_events(_: str = Depends(require_admin), db: Session = Depends(get_db)):
 
 @router.post("/events")
 def create_event(body: EventBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
-    active = db.scalar(select(Event).where(Event.status.notin_(["archived", "finished"])))
-    if active:
-        raise HTTPException(409, "Сначала завершите или архивируйте активное мероприятие")
-    event = Event(**body.model_dump(), status="draft")
+    event = Event(**body.model_dump(), status="draft", is_selected=True)
     round_ = Round(title="Раунд 1", sort_order=0)
     event.rounds.append(round_)
     if body.event_format == "celebration":
@@ -380,7 +376,7 @@ def create_event(body: EventBody, _: str = Depends(require_admin), db: Session =
             QuestionnaireItem(text="Какое место связано с самым тёплым воспоминанием?", sort_order=1),
             QuestionnaireItem(text="Какую песню друзья сразу связывают с вами?", sort_order=2),
         ])
-    db.add(event); db.commit()
+    db.add(event); db.flush(); select_quiz(db, event); db.commit()
     event = db.scalar(event_query().where(Event.id == event.id))
     return serialize_event(event)
 
@@ -413,10 +409,41 @@ def update_event(event_id: str, body: EventBody, _: str = Depends(require_admin)
 
 @router.post("/events/{event_id}/archive")
 def archive_event(event_id: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
-    event = db.get(Event, event_id)
+    event = db.scalar(event_query().where(Event.id == event_id))
     if not event: raise HTTPException(404, "Мероприятие не найдено")
-    event.status = "archived"; db.commit()
-    return {"status": "archived"}
+    if any(session.status not in {"finished", "archived"} for session in event.sessions):
+        raise HTTPException(409, "Сначала завершите открытую игровую комнату")
+    was_selected = event.is_selected
+    replacement = db.scalar(select(Event).where(Event.id != event.id, Event.status != "archived").order_by(Event.updated_at.desc())) if was_selected else None
+    if was_selected and not replacement:
+        raise HTTPException(409, "Нельзя архивировать единственный квиз. Сначала создайте или восстановите другой.")
+    event.status = "archived"; event.is_selected = False
+    if was_selected:
+        replacement.is_selected = True
+    db.commit()
+    return {"status": "archived", "selected_event_id": replacement.id if replacement else None}
+
+
+@router.post("/events/{event_id}/restore")
+def restore_event(event_id: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    event = db.scalar(event_query().where(Event.id == event_id))
+    if not event: raise HTTPException(404, "Мероприятие не найдено")
+    event.status = "ready" if ordered_questions(event) else "draft"
+    select_quiz(db, event)
+    db.commit()
+    event = db.scalar(event_query().where(Event.id == event_id))
+    return serialize_event(event)
+
+
+@router.post("/events/{event_id}/select")
+def select_event(event_id: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    event = db.scalar(event_query().where(Event.id == event_id))
+    if not event: raise HTTPException(404, "Мероприятие не найдено")
+    if event.status == "archived": raise HTTPException(409, "Сначала восстановите квиз из архива")
+    select_quiz(db, event)
+    db.commit()
+    event = db.scalar(event_query().where(Event.id == event_id))
+    return serialize_event(event)
 
 
 @router.post("/events/{event_id}/questionnaire/items")
@@ -735,7 +762,7 @@ async def game_action(code: str, body: ActionBody, _: str = Depends(require_admi
         if session.status not in {"countdown", "answering", "locked", "review"}: raise HTTPException(409, "Этот вопрос нельзя отменить")
         db.execute(delete(Submission).where(Submission.session_id == session.id, Submission.question_id == session.current_question_id)); session.status = "cancelled"; session.deadline_at = None
     elif action == "finish":
-        recalculate_submissions(db, session); session.status = "finished"; session.finished_at = utcnow(); session.deadline_at = None; session.event.status = "finished"
+        recalculate_submissions(db, session); session.status = "finished"; session.finished_at = utcnow(); session.deadline_at = None
     else: raise HTTPException(400, "Неизвестная команда")
     session.state_version += 1
     db.add(AuditLog(session_id=session.id, action=f"organizer.{action}", before=before, after={"status": session.status, "version": session.state_version}))

@@ -30,7 +30,8 @@ export interface QuizPack {
 }
 export interface EventData {
   id: string; title: string; event_format: 'celebration' | 'battle'; topic: string
-  hero_name: string; event_date: string; status: string
+  hero_name: string; event_date: string; status: string; is_selected: boolean
+  created_at?: string | null; updated_at?: string | null
   game_mode: string; theme: ThemeConfig
   hero_photo_url?: string | null; allow_late_join: boolean; question_count: number
   active_session_code?: string | null; latest_session_code?: string | null

@@ -7,7 +7,7 @@ import type { EventData, Snapshot } from '../types'
 import { LivePanel } from './OrganizerPage'
 
 const event = {
-  id: 'event-1', title: 'Тестовый квиз', event_format: 'battle', topic: 'Кино', hero_name: '', event_date: '', status: 'ready',
+  id: 'event-1', title: 'Тестовый квиз', event_format: 'battle', topic: 'Кино', hero_name: '', event_date: '', status: 'ready', is_selected: true,
   game_mode: 'individual', theme: DEFAULT_BRANDING, hero_photo_url: null, allow_late_join: true, question_count: 2,
   active_session_code: 'ABC123', latest_session_code: 'ABC123', sessions: [], rounds: [], questionnaire: null,
 } satisfies EventData

@@ -1,22 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, Archive, ArrowLeft, ArrowRight, BarChart3, BookOpenText, Check, ChevronRight, CircleHelp, ClipboardList, Copy, Crown, ExternalLink, Gamepad2, Gauge, Headphones, History, LayoutDashboard, Link2, LoaderCircle, LogOut, Monitor, MoreVertical, PartyPopper, Pencil, Play, Plus, QrCode, Radio, Save, Send, Settings2, Smartphone, Sparkles, Trash2, Upload, Users, Wifi } from 'lucide-react'
+import { Activity, Archive, ArrowLeft, ArrowRight, BarChart3, BookOpenText, Check, ChevronRight, CircleHelp, ClipboardList, Copy, Crown, ExternalLink, Gamepad2, Gauge, Headphones, History, LayoutDashboard, Library, Link2, LoaderCircle, LogOut, Monitor, MoreVertical, PartyPopper, Pencil, Play, Plus, QrCode, Radio, RotateCcw, Save, Send, Settings2, Smartphone, Sparkles, Trash2, Upload, Users, Wifi } from 'lucide-react'
 import { Link } from '../lib/router'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, ApiError } from '../lib/api'
 import { createId } from '../lib/id'
-import { DEFAULT_BRANDING, THEME_PRESETS, useBranding } from '../lib/branding'
+import { DEFAULT_BRANDING, THEME_PRESETS, themeStyle, useBranding } from '../lib/branding'
 import { useGameStore } from '../store/game'
 import type { EventData, Question, QuestionnaireItem, QuizPack, Snapshot, ThemeConfig } from '../types'
 import { Badge, Button, Card, ConnectionPill, Empty, Field, Logo, SaveState, formatTime } from '../components/ui'
 import { Timer } from '../components/Timer'
 import { QuizPackCard } from './QuizCatalogPage'
 
-type Tab = 'overview' | 'library' | 'settings' | 'questionnaire' | 'editor' | 'rehearsal' | 'live' | 'history'
+type Tab = 'overview' | 'quizzes' | 'catalog' | 'settings' | 'questionnaire' | 'editor' | 'rehearsal' | 'live' | 'history'
 const MAX_QUESTIONS = 50
 
 const nav: { id: Tab; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Главная', icon: LayoutDashboard },
-  { id: 'library', label: 'Каталог квизов', icon: BookOpenText },
+  { id: 'quizzes', label: 'Мои квизы', icon: Library },
+  { id: 'catalog', label: 'Каталог шаблонов', icon: BookOpenText },
   { id: 'settings', label: 'Оформление', icon: Settings2 },
   { id: 'questionnaire', label: 'Анкета героя', icon: ClipboardList },
   { id: 'editor', label: 'Вопросы', icon: CircleHelp },
@@ -34,8 +35,11 @@ function participantCountLabel(count: number) {
 }
 
 export function OrganizerPage() {
+  const { refreshBranding } = useBranding()
   const [authenticated, setAuthenticated] = useState(Boolean(localStorage.getItem('admin_token')))
+  const [events, setEvents] = useState<EventData[]>([])
   const [event, setEvent] = useState<EventData | null>(null)
+  const [creatingEvent, setCreatingEvent] = useState(false)
   const [tab, setTab] = useState<Tab>('overview')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -46,14 +50,16 @@ export function OrganizerPage() {
     setLoading(true); setError('')
     try {
       const items = await api.events()
-      const activeEvent = items.find(item => !['archived', 'finished'].includes(item.status)) || null
+      setEvents(items)
+      const activeEvent = items.find(item => item.is_selected && item.status !== 'archived') || items.find(item => item.status !== 'archived') || null
       setEvent(activeEvent)
       setTab(current => activeEvent?.event_format === 'battle' && current === 'questionnaire' ? 'overview' : current)
       const roomCode = activeEvent?.active_session_code || activeEvent?.latest_session_code
       if (roomCode) {
         const snap = await api.snapshot(roomCode); setSession(snap)
         if (activeEvent?.active_session_code) useGameStore.getState().connect(roomCode)
-      } else setSession(null)
+        else useGameStore.getState().disconnect()
+      } else { setSession(null); useGameStore.getState().disconnect() }
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) { localStorage.removeItem('admin_token'); setAuthenticated(false) }
       else setError(err instanceof Error ? err.message : 'Не удалось загрузить данные')
@@ -64,11 +70,13 @@ export function OrganizerPage() {
 
   if (!authenticated) return <LoginPanel onDone={() => setAuthenticated(true)} />
   if (loading) return <div className="center-screen"><LoaderCircle className="spin" size={32} /><p>Готовим панель…</p></div>
-  if (!event) return <CreateEventPanel onCreated={load} onLogout={() => { localStorage.removeItem('admin_token'); setAuthenticated(false) }} />
+  if (creatingEvent || !event) return <CreateEventPanel onCreated={async () => { setCreatingEvent(false); await refreshBranding(); await load() }} onLogout={() => { localStorage.removeItem('admin_token'); setAuthenticated(false) }} onCancel={event ? () => setCreatingEvent(false) : undefined} />
 
   const logout = () => { localStorage.removeItem('admin_token'); setAuthenticated(false) }
   const eventNav = nav.filter(item => event.event_format === 'celebration' || item.id !== 'questionnaire')
-  const mobileNav = eventNav.filter(item => ['overview', 'library', 'editor', 'live', 'history'].includes(item.id))
+  const mobileNav = eventNav.filter(item => ['overview', 'quizzes', 'editor', 'live', 'history'].includes(item.id))
+  const selectEvent = async (eventId: string) => { await api.selectEvent(eventId); await refreshBranding(); await load(); setTab('overview') }
+  const reloadWithBranding = async () => { await refreshBranding(); await load() }
   const openRoom = async () => {
     try { const snap = await api.openSession(event.id); setSession(snap); useGameStore.getState().connect(snap.session.join_code); setTab('live') }
     catch (err) { setError(err instanceof Error ? err.message : 'Не удалось открыть комнату') }
@@ -77,21 +85,22 @@ export function OrganizerPage() {
   return <div className="admin-shell" style={{ '--accent': event.theme.accent } as React.CSSProperties}>
     <aside className="admin-sidebar">
       <Logo />
-      <nav>{eventNav.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={20} /><span>{item.label}</span>{item.id === 'live' && session && <i className="live-dot" />}</button>)}</nav>
+      <nav>{eventNav.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={20} /><span>{item.label}</span>{item.id === 'live' && event.active_session_code && <i className="live-dot" />}</button>)}</nav>
       <div className="sidebar-bottom"><div className="mode-block"><span className="status-dot" /><div><b>{session?.session.deployment_mode === 'cloud' ? 'Облачный режим' : 'Локальный режим'}</b><small>Сервер доступен</small></div></div><button onClick={logout}><LogOut size={19} /> Выйти</button></div>
     </aside>
     <div className="admin-main">
-      <header className="admin-topbar"><button className="mobile-logo" onClick={() => setTab('overview')}><Logo compact /></button><div><span className="crumb">Мероприятие</span><h1>{event.title}</h1></div><div className="top-actions">{session && <Badge tone="success"><Radio size={13} /> Комната {session.session.join_code}</Badge>}<Button variant="secondary" onClick={() => void load()}><Activity size={17} /> Обновить</Button></div></header>
+      <header className="admin-topbar"><button className="mobile-logo" onClick={() => setTab('overview')}><Logo compact /></button><button className="current-quiz-switch" onClick={() => setTab('quizzes')}><span className="crumb">Выбранный квиз · {events.filter(item => item.status !== 'archived').length} в библиотеке</span><h1>{event.title} <ChevronRight size={15} /></h1></button><div className="top-actions">{event.active_session_code && session && <Badge tone="success"><Radio size={13} /> Комната {session.session.join_code}</Badge>}<Button variant="secondary" onClick={() => void load()}><Activity size={17} /> Обновить</Button></div></header>
       {error && <div className="error-banner">{error}<button onClick={() => setError('')}>×</button></div>}
       <main className="admin-content">
-        {tab === 'overview' && <Overview event={event} session={session} onOpen={openRoom} onTab={setTab} onChanged={load} />}
-        {tab === 'library' && <QuizLibraryPanel activeEvent={event} onInstalled={async () => { await load(); setTab('overview') }} />}
+        {tab === 'overview' && <Overview event={event} session={session} onOpen={openRoom} onTab={setTab} onChanged={reloadWithBranding} />}
+        {tab === 'quizzes' && <MyQuizzesPanel events={events} current={event} onSelect={selectEvent} onCreate={() => setCreatingEvent(true)} onChanged={reloadWithBranding} />}
+        {tab === 'catalog' && <PackCatalogPanel onInstalled={async () => { await refreshBranding(); await load(); setTab('overview') }} />}
         {tab === 'settings' && <SettingsPanel event={event} onChanged={load} />}
         {tab === 'questionnaire' && event.questionnaire && <QuestionnairePanel event={event} onChanged={load} />}
         {tab === 'editor' && <EditorPanel event={event} onChanged={load} />}
         {tab === 'rehearsal' && <RehearsalPanel event={event} session={session} onOpen={openRoom} />}
         {tab === 'live' && <LivePanel event={event} session={session} onOpen={openRoom} onResults={() => setTab('history')} />}
-        {tab === 'history' && <ResultsPanel session={session} />}
+        {tab === 'history' && <ResultsPanel event={event} session={session} onReplay={openRoom} />}
       </main>
       <nav className="mobile-tabs">{mobileNav.map(item => <button key={item.id} className={tab === item.id ? 'active' : ''} onClick={() => setTab(item.id)}><item.icon size={20} /><span>{item.label}</span></button>)}</nav>
     </div>
@@ -106,7 +115,7 @@ function LoginPanel({ onDone }: { onDone: () => void }) {
   return <main className="login-page"><Link to="/" className="back-link"><ArrowLeft size={17} /> На главную</Link><Card className="login-card"><Logo /><div className="login-intro"><Badge tone="accent">Панель организатора</Badge><h1>Соберём квиз?</h1><p>Войдите, чтобы подготовить вопросы и управлять игрой.</p></div><form onSubmit={submit}><Field label="Электронная почта"><input type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="username" /></Field><Field label="Пароль"><input type="password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" /></Field>{error && <p className="form-error">{error}</p>}<Button type="submit" disabled={loading}>{loading ? <LoaderCircle className="spin" size={19} /> : <Sparkles size={19} />} Войти</Button></form><small className="demo-hint">Демо: organizer@example.local / celebrate</small></Card></main>
 }
 
-function CreateEventPanel({ onCreated, onLogout }: { onCreated: () => void; onLogout: () => void }) {
+function CreateEventPanel({ onCreated, onLogout, onCancel }: { onCreated: () => void; onLogout: () => void; onCancel?: () => void }) {
   const [form, setForm] = useState({
     title: '', event_format: 'celebration' as EventData['event_format'], topic: '', hero_name: '', event_date: new Date().toISOString().slice(0, 10),
     game_mode: 'individual', allow_late_join: true, hero_photo_url: null,
@@ -121,7 +130,7 @@ function CreateEventPanel({ onCreated, onLogout }: { onCreated: () => void; onLo
     finally { setBusy(false) }
   }
   return <main className="login-page create-event-page">
-    <button className="back-link" onClick={onLogout}><LogOut size={17} /> Выйти</button>
+    <button className="back-link" onClick={onCancel || onLogout}>{onCancel ? <ArrowLeft size={17} /> : <LogOut size={17} />} {onCancel ? 'Назад к моим квизам' : 'Выйти'}</button>
     <Card className="login-card create-event-card"><Logo /><div className="login-intro"><Badge tone="accent">Новое мероприятие</Badge><h1>{form.event_format === 'battle' ? 'На какую тему играем?' : 'Кого сегодня празднуем?'}</h1><p>{form.event_format === 'battle' ? 'Создайте тематическую игру — первый раунд появится автоматически.' : 'Создайте основу — анкета героя и первый раунд появятся автоматически.'}</p><Link className="catalog-inline-link" to="/quizzes"><BookOpenText size={17} /> Выбрать готовый квиз из каталога <ArrowRight size={16} /></Link></div>
       <form onSubmit={submit} className="form-grid"><Field label="Формат"><select value={form.event_format} onChange={e => { const event_format = e.target.value as EventData['event_format']; setForm({ ...form, event_format, game_mode: event_format === 'battle' ? 'team' : form.game_mode }) }}><option value="celebration">Праздник о человеке</option><option value="battle">Тематический квиз-баттл</option></select></Field><Field label="Название"><input required minLength={2} value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder={form.event_format === 'battle' ? 'Большая битва эрудитов' : 'Вечер в честь…'} /></Field>{form.event_format === 'celebration' ? <Field label="Имя героя"><input required value={form.hero_name} onChange={e => setForm({ ...form, hero_name: e.target.value })} placeholder="Имя" /></Field> : <Field label="Тема баттла"><input required value={form.topic} onChange={e => setForm({ ...form, topic: e.target.value })} placeholder="Кино, музыка, спорт, наука…" /></Field>}<Field label="Дата"><input type="date" value={form.event_date} onChange={e => setForm({ ...form, event_date: e.target.value })} /></Field><Field label="Режим"><select value={form.game_mode} onChange={e => setForm({ ...form, game_mode: e.target.value })}><option value="individual">Личный</option><option value="team">Командный</option></select></Field><Field label="Акцентный цвет"><input type="color" value={form.theme.accent} onChange={e => setForm({ ...form, theme: { ...form.theme, accent: e.target.value } })} /></Field><label className="check-row"><input type="checkbox" checked={form.allow_late_join} onChange={e => setForm({ ...form, allow_late_join: e.target.checked })} /><span><b>Разрешить поздний вход</b><small>Опоздавшие начнут со следующего вопроса</small></span></label>{error && <p className="form-error form-grid-wide">{error}</p>}<Button type="submit" className="form-grid-wide" disabled={busy || !form.title.trim() || (form.event_format === 'celebration' ? !form.hero_name.trim() : !form.topic.trim())}>{busy ? <LoaderCircle className="spin" size={19} /> : <PartyPopper size={19} />} Создать мероприятие</Button></form>
     </Card>
@@ -132,17 +141,32 @@ function Overview({ event, session, onOpen, onTab, onChanged }: { event: EventDa
   const [editing, setEditing] = useState(false); const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({ title: event.title, event_format: event.event_format, topic: event.topic, hero_name: event.hero_name, event_date: event.event_date, game_mode: event.game_mode, allow_late_join: event.allow_late_join, hero_photo_url: event.hero_photo_url, theme: event.theme })
   const save = async () => { setSaving(true); await api.updateEvent(event.id, form as Partial<EventData>); setSaving(false); setEditing(false); onChanged() }
-  const archive = async () => { if (!window.confirm('Архивировать мероприятие? История игр сохранится.')) return; setSaving(true); await api.archiveEvent(event.id); setSaving(false); onChanged() }
+  const archive = async () => { if (!window.confirm('Перенести квиз в архив? Вопросы, настройки и история игр сохранятся — квиз можно будет восстановить.')) return; setSaving(true); try { await api.archiveEvent(event.id); onChanged() } catch (err) { window.alert(err instanceof Error ? err.message : 'Не удалось архивировать квиз') } finally { setSaving(false) } }
   const progress = Math.min(100, Math.round((event.question_count / 10) * 100))
   return <div className="content-stack">
-    <section className="page-heading"><div><Badge tone="accent"><PartyPopper size={14} /> Активное мероприятие</Badge><h2>Добрый день! Всё идёт по плану.</h2><p>До эфира осталось проверить вопросы и устройства гостей.</p></div><Button onClick={session ? () => onTab('live') : onOpen}><Play size={19} /> {session ? 'Перейти в эфир' : 'Открыть комнату'}</Button></section>
+    <section className="page-heading"><div><Badge tone="accent"><PartyPopper size={14} /> Выбранный квиз</Badge><h2>{event.active_session_code ? 'Игра уже открыта' : event.sessions.length ? 'Можно сыграть ещё раз' : 'Всё готово к первой игре'}</h2><p>{event.active_session_code ? 'Вернитесь в эфир и продолжайте управление комнатой.' : 'Каждый запуск создаёт новую комнату, а этот квиз и его настройки остаются в библиотеке.'}</p></div><Button onClick={event.active_session_code ? () => onTab('live') : onOpen}><Play size={19} /> {event.active_session_code ? 'Перейти в эфир' : event.sessions.length ? 'Играть снова' : 'Открыть комнату'}</Button></section>
     <div className="stats-grid"><Card><span className="metric-icon coral"><CircleHelp /></span><div><strong>{event.question_count}</strong><span>вопросов готово</span></div><button onClick={() => onTab('editor')}>Редактировать <ChevronRight /></button></Card>{event.event_format === 'celebration' ? <Card><span className="metric-icon purple"><ClipboardList /></span><div><strong>{event.questionnaire?.status === 'completed' ? 'Готова' : 'Ждём'}</strong><span>анкета героя</span></div><button onClick={() => onTab('questionnaire')}>Открыть <ChevronRight /></button></Card> : <Card><span className="metric-icon purple"><Gamepad2 /></span><div><strong>Баттл</strong><span>{event.topic}</span></div><button onClick={() => setEditing(true)}>Настроить <ChevronRight /></button></Card>}<Card><span className="metric-icon mint"><Users /></span><div><strong>{session?.participants.length || 0}</strong><span>игроков в комнате</span></div><button onClick={() => onTab('live')}>Посмотреть <ChevronRight /></button></Card></div>
     <div className="overview-grid"><Card className="event-card"><div className="card-title"><div><span className="overline">Карточка события</span><h3>{event.title}</h3></div><div className="event-card-actions"><button className="icon-button" title="Редактировать" onClick={() => setEditing(!editing)}><Pencil size={18} /></button><button className="icon-button danger-icon" title="Архивировать" onClick={() => void archive()} disabled={saving}><Archive size={18} /></button></div></div>{editing ? <div className="form-grid"><Field label="Формат"><select value={form.event_format} onChange={e => setForm({ ...form, event_format: e.target.value as EventData['event_format'] })}><option value="celebration">Праздник о человеке</option><option value="battle">Тематический квиз-баттл</option></select></Field><Field label="Название"><input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} /></Field>{form.event_format === 'celebration' ? <Field label="Имя героя"><input value={form.hero_name} onChange={e => setForm({ ...form, hero_name: e.target.value })} /></Field> : <Field label="Тема баттла"><input value={form.topic} onChange={e => setForm({ ...form, topic: e.target.value })} placeholder="Кино, музыка, спорт…" /></Field>}<Field label="Дата"><input type="date" value={form.event_date} onChange={e => setForm({ ...form, event_date: e.target.value })} /></Field><Field label="Режим"><select value={form.game_mode} onChange={e => setForm({ ...form, game_mode: e.target.value })}><option value="individual">Личный</option><option value="team">Командный</option></select></Field><Field label="Акцентный цвет"><input type="color" value={form.theme.accent} onChange={e => setForm({ ...form, theme: { ...form.theme, accent: e.target.value } })} /></Field><label className="check-row"><input type="checkbox" checked={form.allow_late_join} onChange={e => setForm({ ...form, allow_late_join: e.target.checked })} /><span><b>Разрешить поздний вход</b><small>Игрок начнёт со следующего вопроса</small></span></label><div className="form-actions"><Button variant="ghost" onClick={() => setEditing(false)}>Отмена</Button><Button onClick={() => void save()} disabled={saving || !form.title.trim() || (form.event_format === 'celebration' ? !form.hero_name.trim() : !form.topic.trim())}><Save size={17} /> Сохранить</Button></div></div> : <><div className="event-hero-preview"><div className="event-initial">{(event.event_format === 'battle' ? event.topic : event.hero_name).slice(0, 1)}</div><div><span>{event.event_format === 'battle' ? 'Тема квиз-баттла' : 'Герой праздника'}</span><b>{event.event_format === 'battle' ? event.topic : event.hero_name}</b><small>{event.event_date ? new Date(event.event_date).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Дата не указана'}</small></div></div><div className="event-meta"><span><Gamepad2 /> {event.game_mode === 'team' ? 'Командная игра' : 'Личная игра'}</span><span><Wifi /> Поздний вход {event.allow_late_join ? 'включён' : 'выключен'}</span></div></>}</Card>
       <Card className="readiness-card"><div className="card-title"><div><span className="overline">Готовность</span><h3>До старта — три шага</h3></div><b>{progress}%</b></div><div className="progress-line"><i style={{ width: `${progress}%` }} /></div><button className="check-step done" onClick={() => event.event_format === 'celebration' ? onTab('questionnaire') : setEditing(true)}><Check /><span><b>Оформить мероприятие</b><small>{event.event_format === 'battle' ? 'Название, тема и режим готовы' : 'Имя, дата и тема готовы'}</small></span><ChevronRight /></button><button className={`check-step ${event.question_count >= 3 ? 'done' : ''}`} onClick={() => onTab('editor')}><Check /><span><b>Подготовить вопросы</b><small>{event.question_count} добавлено · рекомендуем от 10</small></span><ChevronRight /></button><button className="check-step" onClick={() => onTab('rehearsal')}><Check /><span><b>Провести репетицию</b><small>Экран, звук и телефоны</small></span><ChevronRight /></button></Card></div>
   </div>
 }
 
-function QuizLibraryPanel({ activeEvent, onInstalled }: { activeEvent: EventData; onInstalled: () => Promise<void> | void }) {
+function MyQuizzesPanel({ events, current, onSelect, onCreate, onChanged }: { events: EventData[]; current: EventData; onSelect: (eventId: string) => Promise<void>; onCreate: () => void; onChanged: () => Promise<void> | void }) {
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+  const saved = events.filter(item => item.status !== 'archived')
+  const archived = events.filter(item => item.status === 'archived')
+  const choose = async (eventId: string) => { setBusy(eventId); setError(''); try { await onSelect(eventId) } catch (err) { setError(err instanceof Error ? err.message : 'Не удалось открыть квиз') } finally { setBusy('') } }
+  const archive = async (item: EventData) => {
+    if (!window.confirm(`Перенести «${item.title}» в архив? Все вопросы, настройки и результаты останутся сохранены.`)) return
+    setBusy(item.id); setError('')
+    try { await api.archiveEvent(item.id); await onChanged() } catch (err) { setError(err instanceof Error ? err.message : 'Не удалось архивировать квиз') } finally { setBusy('') }
+  }
+  const restore = async (item: EventData) => { setBusy(item.id); setError(''); try { await api.restoreEvent(item.id); await onSelect(item.id) } catch (err) { setError(err instanceof Error ? err.message : 'Не удалось восстановить квиз') } finally { setBusy('') } }
+  return <div className="content-stack my-quizzes-panel"><section className="page-heading"><div><Badge tone="accent"><Library size={14} /> Постоянная библиотека</Badge><h2>Мои квизы</h2><p>Настройки и вопросы каждого квиза сохраняются. Открывайте любой из них и создавайте новую игровую комнату столько раз, сколько нужно.</p></div><div className="quiz-library-actions"><Button variant="secondary" onClick={() => onSelect(current.id)} disabled><Check size={17} /> Выбран: {current.title}</Button><Button onClick={onCreate}><Plus size={18} /> Новый квиз</Button></div></section>{error && <p className="form-error">{error}</p>}<section className="saved-quiz-grid">{saved.map(item => <Card key={item.id} className={`saved-quiz-card ${item.id === current.id ? 'selected' : ''}`} style={themeStyle(item.theme)}><div className="saved-quiz-head"><span className="saved-quiz-mark">{item.theme.logo_mark || (item.topic || item.hero_name || item.title).slice(0, 2)}</span><div>{item.id === current.id && <Badge tone="success"><Check size={12} /> Выбран</Badge>}<Badge tone="neutral">{item.event_format === 'battle' ? 'Квиз-баттл' : 'Праздник'}</Badge></div></div><span className="quiz-pack-topic">{item.event_format === 'battle' ? item.topic : `О ${item.hero_name}`}</span><h3>{item.title}</h3><div className="saved-quiz-stats"><span><CircleHelp /> <b>{item.question_count}</b><small>вопросов</small></span><span><Play /> <b>{item.sessions.length}</b><small>игр</small></span><span><Users /> <b>{item.sessions.reduce((sum, game) => sum + game.participant_count, 0)}</b><small>участников</small></span></div>{item.sessions.length > 0 && <p className="saved-quiz-last">Последняя комната: <b>{item.sessions[0].join_code}</b> · {item.sessions[0].status === 'finished' ? 'завершена' : 'в процессе'}</p>}<div className="saved-quiz-actions"><Button onClick={() => void choose(item.id)} disabled={Boolean(busy) || item.id === current.id}>{busy === item.id ? <LoaderCircle className="spin" /> : item.id === current.id ? <Check /> : <ChevronRight />} {item.id === current.id ? 'Открыт' : 'Выбрать'}</Button><button className="icon-button danger-icon" title="Перенести в архив" onClick={() => void archive(item)} disabled={Boolean(busy)}><Archive size={17} /></button></div></Card>)}</section>{archived.length > 0 && <section className="quiz-archive"><div className="section-title"><div><span className="overline">Можно восстановить</span><h3>Архив</h3></div><Badge>{archived.length}</Badge></div>{archived.map(item => <Card key={item.id}><span className="saved-quiz-mark muted">{item.theme.logo_mark || 'Q'}</span><div><b>{item.title}</b><small>{item.question_count} вопросов · {item.sessions.length} игр</small></div><Button variant="secondary" onClick={() => void restore(item)} disabled={Boolean(busy)}>{busy === item.id ? <LoaderCircle className="spin" /> : <RotateCcw />} Восстановить</Button></Card>)}</section>}</div>
+}
+
+function PackCatalogPanel({ onInstalled }: { onInstalled: () => Promise<void> | void }) {
   const { refreshBranding } = useBranding()
   const [packs, setPacks] = useState<QuizPack[]>([])
   const [loading, setLoading] = useState(true)
@@ -150,18 +174,18 @@ function QuizLibraryPanel({ activeEvent, onInstalled }: { activeEvent: EventData
   const [error, setError] = useState('')
   useEffect(() => { api.quizPacks().then(setPacks).catch(err => setError(err instanceof Error ? err.message : 'Не удалось открыть каталог')).finally(() => setLoading(false)) }, [])
   const install = async (pack: QuizPack) => {
-    const confirmed = window.confirm(`Создать «${pack.title}»? Текущий квиз «${activeEvent.title}» будет перенесён в архив. История сыгранных комнат сохранится.`)
+    const confirmed = window.confirm(`Добавить «${pack.title}» в мои квизы? Уже сохранённые квизы останутся в библиотеке.`)
     if (!confirmed) return
     setInstalling(pack.slug); setError('')
     try {
-      await api.installQuizPack(pack.slug, true)
+      await api.installQuizPack(pack.slug)
       await refreshBranding()
       await onInstalled()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Не удалось создать тематический квиз')
     } finally { setInstalling('') }
   }
-  return <div className="content-stack quiz-library-panel"><section className="page-heading"><div><Badge tone="accent"><BookOpenText size={14} /> Каталог квизов</Badge><h2>Готовые тематические баттлы</h2><p>Выберите набор — платформа создаст отдельный квиз со своими текстами, иконкой, цветами и 20 готовыми вопросами.</p></div><Link className="button button-secondary" to="/quizzes" target="_blank">Открыть публичный каталог <ExternalLink size={16} /></Link></section>{error && <p className="form-error">{error}</p>}{loading ? <div className="center-panel"><LoaderCircle className="spin" /></div> : <section className="quiz-pack-grid">{packs.map(pack => <QuizPackCard key={pack.slug} pack={pack} action={<Button onClick={() => void install(pack)} disabled={Boolean(installing)}>{installing === pack.slug ? <LoaderCircle className="spin" /> : <Play size={16} />} Создать</Button>} />)}</section>}</div>
+  return <div className="content-stack quiz-library-panel"><section className="page-heading"><div><Badge tone="accent"><BookOpenText size={14} /> Каталог шаблонов</Badge><h2>Добавьте ещё один готовый квиз</h2><p>Шаблон станет новым самостоятельным квизом. Все текущие квизы, их настройки и история игр останутся без изменений.</p></div><Link className="button button-secondary" to="/quizzes" target="_blank">Открыть публичный каталог <ExternalLink size={16} /></Link></section>{error && <p className="form-error">{error}</p>}{loading ? <div className="center-panel"><LoaderCircle className="spin" /></div> : <section className="quiz-pack-grid">{packs.map(pack => <QuizPackCard key={pack.slug} pack={pack} action={<Button onClick={() => void install(pack)} disabled={Boolean(installing)}>{installing === pack.slug ? <LoaderCircle className="spin" /> : <Plus size={16} />} Добавить</Button>} />)}</section>}</div>
 }
 
 function SettingsPanel({ event, onChanged }: { event: EventData; onChanged: () => void }) {
@@ -337,11 +361,14 @@ export function LivePanel({ event, session, onOpen, onResults }: { event: EventD
 
 function statusLabel(status: string) { return ({ lobby: 'Лобби', countdown: 'Подготовка', answering: 'Принимаем ответы', locked: 'Ответы закрыты', review: 'Проверка ответов', reveal: 'Ответ раскрыт', paused: 'Пауза', cancelled: 'Вопрос отменён', finished: 'Финал' } as Record<string, string>)[status] || status }
 
-function ResultsPanel({ session }: { session: Snapshot | null }) {
+function ResultsPanel({ event, session, onReplay }: { event: EventData; session: Snapshot | null; onReplay: () => void }) {
+  const [selectedCode, setSelectedCode] = useState(event.latest_session_code || '')
   const [results, setResults] = useState<any>(null); const [loading, setLoading] = useState(false)
-  useEffect(() => { if (session?.session.join_code) { setLoading(true); api.results(session.session.join_code).then(setResults).finally(() => setLoading(false)) } }, [session?.session.join_code, session?.version])
-  if (!session) return <Empty icon="♜" title="История пока пуста" text="После первой открытой комнаты здесь появятся участники и ответы." />
+  useEffect(() => { setSelectedCode(event.latest_session_code || '') }, [event.id, event.latest_session_code])
+  useEffect(() => { if (selectedCode) { setLoading(true); setResults(null); api.results(selectedCode).then(setResults).finally(() => setLoading(false)) } }, [selectedCode, session?.version])
+  if (!event.sessions.length) return <div className="center-panel"><Empty icon="♜" title="История пока пуста" text="После первой открытой комнаты здесь появятся участники и ответы." /><Button onClick={onReplay}><Play size={17} /> Начать первую игру</Button></div>
   if (loading && !results) return <div className="center-panel"><LoaderCircle className="spin" /></div>
   const ranking = results?.leaderboard || []
-  return <div className="content-stack"><section className="page-heading"><div><Badge tone={session.session.status === 'finished' ? 'success' : 'neutral'}>{session.session.status === 'finished' ? 'Игра завершена' : 'Предварительные данные'}</Badge><h2>Результаты игры</h2><p>Правильность важнее скорости. При равенстве сравнивается суммарное время правильных ответов.</p></div></section>{ranking.length ? <Card className="results-table"><div className="table-row table-head"><span>Место</span><span>Игрок</span><span>Верно</span><span>Время</span></div>{ranking.map((row: any) => <div className="table-row" key={row.id}><strong>{row.rank}</strong><span className="player-cell"><i>{row.avatar}</i><b>{row.name}</b></span><span>{row.correct_count}</span><span>{formatTime(row.correct_time_ms)}</span></div>)}</Card> : <Empty icon="✦" title="Ответов ещё нет" text="Рейтинг заполнится после раскрытия вопросов." />}{results?.submissions?.length > 0 && <Card><div className="section-title"><div><span className="overline">Журнал</span><h3>Все ответы</h3></div></div><div className="submission-list">{results.submissions.map((row: any) => <div key={row.id}><span className={row.is_correct ? 'answer-ok' : 'answer-no'}>{row.is_correct ? '✓' : '×'}</span><div><b>{row.name}</b><small>{row.question}</small></div><code>{String(row.answer ?? 'Пропуск')}</code><span>{formatTime(row.elapsed_ms)}</span></div>)}</div></Card>}</div>
+  const selectedSession = event.sessions.find(item => item.join_code === selectedCode)
+  return <div className="content-stack"><section className="page-heading"><div><Badge tone={selectedSession?.status === 'finished' ? 'success' : 'neutral'}>{selectedSession?.status === 'finished' ? 'Игра завершена' : 'Предварительные данные'}</Badge><h2>История игр: {event.title}</h2><p>Каждый повторный запуск хранится отдельно. Выберите комнату, чтобы посмотреть её рейтинг и ответы.</p></div><Badge>{event.sessions.length} игр</Badge></section><Card className="session-history-picker">{event.sessions.map((item, index) => <button key={item.id} className={selectedCode === item.join_code ? 'active' : ''} onClick={() => setSelectedCode(item.join_code)}><span>{index + 1}</span><div><b>Комната {item.join_code}</b><small>{item.participant_count} игроков · {item.status === 'finished' ? 'завершена' : 'в процессе'}</small></div>{selectedCode === item.join_code && <Check />}</button>)}</Card>{ranking.length ? <Card className="results-table"><div className="table-row table-head"><span>Место</span><span>Игрок</span><span>Верно</span><span>Время</span></div>{ranking.map((row: any) => <div className="table-row" key={row.id}><strong>{row.rank}</strong><span className="player-cell"><i>{row.avatar}</i><b>{row.name}</b></span><span>{row.correct_count}</span><span>{formatTime(row.correct_time_ms)}</span></div>)}</Card> : <Empty icon="✦" title="Ответов ещё нет" text="Рейтинг заполнится после раскрытия вопросов." />}{results?.submissions?.length > 0 && <Card><div className="section-title"><div><span className="overline">Журнал</span><h3>Все ответы</h3></div></div><div className="submission-list">{results.submissions.map((row: any) => <div key={row.id}><span className={row.is_correct ? 'answer-ok' : 'answer-no'}>{row.is_correct ? '✓' : '×'}</span><div><b>{row.name}</b><small>{row.question}</small></div><code>{String(row.answer ?? 'Пропуск')}</code><span>{formatTime(row.elapsed_ms)}</span></div>)}</div></Card>}</div>
 }

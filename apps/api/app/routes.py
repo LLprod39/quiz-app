@@ -69,6 +69,8 @@ class EventBody(BaseModel):
     game_mode: Literal["individual", "team"] = "individual"
     host_mode: Literal["auto", "manual"] = "auto"
     auto_advance_seconds: int = Field(default=5, ge=2, le=30)
+    tv_display_mode: Literal["classic", "insights"] = "classic"
+    tv_chart_style: Literal["both", "pie", "bar"] = "both"
     allow_late_join: bool = True
     hero_photo_url: str | None = None
     theme: ThemeBody = Field(default_factory=ThemeBody)
@@ -88,6 +90,11 @@ class EventBody(BaseModel):
 class HostControlBody(BaseModel):
     host_mode: Literal["auto", "manual"] = "auto"
     auto_advance_seconds: int = Field(default=5, ge=2, le=30)
+
+
+class TvDisplayBody(BaseModel):
+    tv_display_mode: Literal["classic", "insights"] = "classic"
+    tv_chart_style: Literal["both", "pie", "bar"] = "both"
 
 
 class PackInstallBody(BaseModel):
@@ -251,7 +258,8 @@ def serialize_event(event: Event) -> dict:
         "id": event.id, "title": event.title, "event_format": event.event_format, "topic": event.topic,
         "hero_name": event.hero_name, "event_date": event.event_date,
         "status": event.status, "is_selected": event.is_selected, "game_mode": event.game_mode,
-        "host_mode": event.host_mode, "auto_advance_seconds": event.auto_advance_seconds, "theme": normalize_theme(event.theme),
+        "host_mode": event.host_mode, "auto_advance_seconds": event.auto_advance_seconds,
+        "tv_display_mode": event.tv_display_mode, "tv_chart_style": event.tv_chart_style, "theme": normalize_theme(event.theme),
         "hero_photo_url": event.hero_photo_url, "allow_late_join": event.allow_late_join,
         "created_at": iso_utc(event.created_at), "updated_at": iso_utc(event.updated_at),
         "question_count": len(questions), "active_session_code": active.join_code if active else None,
@@ -435,6 +443,30 @@ async def update_host_control(event_id: str, body: HostControlBody, _: str = Dep
         session.state_version += 1
         active_session_ids.append(session.id)
     db.add(AuditLog(action="event.host_control.updated", before=before, after=body.model_dump()))
+    db.commit()
+    for session_id in active_session_ids:
+        session = db.scalar(session_query().where(GameSession.id == session_id).execution_options(populate_existing=True))
+        if session:
+            await broadcast_state(db, session)
+    event = db.scalar(event_query().where(Event.id == event_id).execution_options(populate_existing=True))
+    return serialize_event(event)
+
+
+@router.put("/events/{event_id}/tv-display")
+async def update_tv_display(event_id: str, body: TvDisplayBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    event = db.scalar(event_query().where(Event.id == event_id))
+    if not event:
+        raise HTTPException(404, "Мероприятие не найдено")
+    before = {"tv_display_mode": event.tv_display_mode, "tv_chart_style": event.tv_chart_style}
+    event.tv_display_mode = body.tv_display_mode
+    event.tv_chart_style = body.tv_chart_style
+    active_session_ids = []
+    for session in event.sessions:
+        if session.status in {"finished", "archived"}:
+            continue
+        session.state_version += 1
+        active_session_ids.append(session.id)
+    db.add(AuditLog(action="event.tv_display.updated", before=before, after=body.model_dump()))
     db.commit()
     for session_id in active_session_ids:
         session = db.scalar(session_query().where(GameSession.id == session_id).execution_options(populate_existing=True))
@@ -764,7 +796,7 @@ def submit_answer(code: str, body: AnswerBody, background_tasks: BackgroundTasks
         db.add(AuditLog(session_id=session.id, action="question.all_answered", after={"answered_count": answered_count, "target_count": target_count, "status": session.status}))
     version = bump_version(db, session.id); db.commit()
     if hub.has_connections(session.join_code):
-        if question_closed:
+        if question_closed or session.event.tv_display_mode == "insights":
             session = find_session(db, code)
             background_tasks.add_task(hub.broadcast, session.join_code, session_snapshot(db, session))
         else:

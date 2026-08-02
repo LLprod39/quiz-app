@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, Archive, ArrowLeft, ArrowRight, BarChart3, BookOpenText, Check, ChevronRight, CircleHelp, ClipboardList, Copy, Crown, ExternalLink, Gamepad2, Gauge, Headphones, History, LayoutDashboard, Library, Link2, LoaderCircle, LogOut, Monitor, MoreVertical, PartyPopper, Pencil, Play, Plus, QrCode, Radio, RotateCcw, Save, Send, Settings2, Smartphone, Sparkles, Trash2, Upload, Users, Wifi } from 'lucide-react'
+import { Activity, Archive, ArrowLeft, ArrowRight, BarChart3, BookOpenText, Check, ChevronRight, CircleHelp, ClipboardList, Copy, Crown, ExternalLink, Gamepad2, Gauge, Headphones, History, LayoutDashboard, Library, Link2, LoaderCircle, LogOut, Monitor, MoreVertical, PartyPopper, Pencil, Play, Plus, QrCode, Radio, RotateCcw, Save, Send, Settings2, Share2, Smartphone, Sparkles, Trash2, Upload, Users, Wifi } from 'lucide-react'
 import { Link } from '../lib/router'
 import { QRCodeSVG } from 'qrcode.react'
 import { api, ApiError } from '../lib/api'
@@ -11,7 +11,7 @@ import { Badge, Button, Card, ConnectionPill, Empty, Field, Logo, SaveState, for
 import { Timer } from '../components/Timer'
 import { QuizPackCard } from './QuizCatalogPage'
 
-type Tab = 'overview' | 'quizzes' | 'catalog' | 'settings' | 'questionnaire' | 'editor' | 'rehearsal' | 'live' | 'history'
+type Tab = 'overview' | 'quizzes' | 'catalog' | 'settings' | 'questionnaire' | 'editor' | 'rehearsal' | 'share' | 'live' | 'history'
 const MAX_QUESTIONS = 50
 
 const nav: { id: Tab; label: string; icon: typeof LayoutDashboard }[] = [
@@ -22,6 +22,7 @@ const nav: { id: Tab; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'questionnaire', label: 'Анкета героя', icon: ClipboardList },
   { id: 'editor', label: 'Вопросы', icon: CircleHelp },
   { id: 'rehearsal', label: 'Репетиция', icon: Gauge },
+  { id: 'share', label: 'Share / ТВ', icon: Share2 },
   { id: 'live', label: 'Эфир', icon: Radio },
   { id: 'history', label: 'Результаты', icon: History },
 ]
@@ -99,6 +100,7 @@ export function OrganizerPage() {
         {tab === 'questionnaire' && event.questionnaire && <QuestionnairePanel event={event} onChanged={load} />}
         {tab === 'editor' && <EditorPanel event={event} onChanged={load} />}
         {tab === 'rehearsal' && <RehearsalPanel event={event} session={session} onOpen={openRoom} />}
+        {tab === 'share' && <SharePanel event={event} session={session} onOpen={openRoom} onChanged={load} />}
         {tab === 'live' && <LivePanel event={event} session={session} onOpen={openRoom} onResults={() => setTab('history')} onChanged={load} />}
         {tab === 'history' && <ResultsPanel event={event} session={session} onReplay={openRoom} />}
       </main>
@@ -118,7 +120,7 @@ function LoginPanel({ onDone }: { onDone: () => void }) {
 function CreateEventPanel({ onCreated, onLogout, onCancel }: { onCreated: () => void; onLogout: () => void; onCancel?: () => void }) {
   const [form, setForm] = useState({
     title: '', event_format: 'celebration' as EventData['event_format'], topic: '', hero_name: '', event_date: new Date().toISOString().slice(0, 10),
-    game_mode: 'individual', host_mode: 'auto' as const, auto_advance_seconds: 5, allow_late_join: true, hero_photo_url: null,
+    game_mode: 'individual', host_mode: 'auto' as const, auto_advance_seconds: 5, tv_display_mode: 'classic' as const, tv_chart_style: 'both' as const, allow_late_join: true, hero_photo_url: null,
     theme: { accent: '#ff6b6b', mode: 'dark', decor: 'confetti' },
   })
   const [busy, setBusy] = useState(false)
@@ -139,7 +141,7 @@ function CreateEventPanel({ onCreated, onLogout, onCancel }: { onCreated: () => 
 
 function Overview({ event, session, onOpen, onTab, onChanged }: { event: EventData; session: Snapshot | null; onOpen: () => void; onTab: (tab: Tab) => void; onChanged: () => void }) {
   const [editing, setEditing] = useState(false); const [saving, setSaving] = useState(false)
-  const [form, setForm] = useState({ title: event.title, event_format: event.event_format, topic: event.topic, hero_name: event.hero_name, event_date: event.event_date, game_mode: event.game_mode, host_mode: event.host_mode, auto_advance_seconds: event.auto_advance_seconds, allow_late_join: event.allow_late_join, hero_photo_url: event.hero_photo_url, theme: event.theme })
+  const [form, setForm] = useState({ title: event.title, event_format: event.event_format, topic: event.topic, hero_name: event.hero_name, event_date: event.event_date, game_mode: event.game_mode, host_mode: event.host_mode, auto_advance_seconds: event.auto_advance_seconds, tv_display_mode: event.tv_display_mode, tv_chart_style: event.tv_chart_style, allow_late_join: event.allow_late_join, hero_photo_url: event.hero_photo_url, theme: event.theme })
   const save = async () => { setSaving(true); await api.updateEvent(event.id, form as Partial<EventData>); setSaving(false); setEditing(false); onChanged() }
   const archive = async () => { if (!window.confirm('Перенести квиз в архив? Вопросы, настройки и история игр сохранятся — квиз можно будет восстановить.')) return; setSaving(true); try { await api.archiveEvent(event.id); onChanged() } catch (err) { window.alert(err instanceof Error ? err.message : 'Не удалось архивировать квиз') } finally { setSaving(false) } }
   const progress = Math.min(100, Math.round((event.question_count / 10) * 100))
@@ -199,6 +201,8 @@ function SettingsPanel({ event, onChanged }: { event: EventData; onChanged: () =
     game_mode: event.game_mode,
     host_mode: event.host_mode,
     auto_advance_seconds: event.auto_advance_seconds,
+    tv_display_mode: event.tv_display_mode,
+    tv_chart_style: event.tv_chart_style,
     allow_late_join: event.allow_late_join,
     hero_photo_url: event.hero_photo_url,
     theme: { ...DEFAULT_BRANDING, ...event.theme },
@@ -339,6 +343,63 @@ function QuestionForm({ event, question, onSaved, onDelete }: { event: EventData
     {form.type === 'text' && <><Field label="Правильный ответ"><input value={form.correct_answer || ''} onChange={e => setForm({ ...form, correct_answer: e.target.value })} /></Field><Field label="Синонимы" hint="Разделите запятыми"><input value={Array.isArray(form.accepted_answers) ? form.accepted_answers.join(', ') : form.accepted_answers} onChange={e => setForm({ ...form, accepted_answers: e.target.value })} placeholder="Питер, СПб" /></Field></>}
     {['number', 'closest'].includes(form.type) && <div className="form-grid two"><Field label="Правильное число"><input type="number" value={form.correct_answer ?? ''} onChange={e => setForm({ ...form, correct_answer: e.target.value })} /></Field>{form.type === 'number' && <Field label="Допуск ±"><input type="number" min="0" value={form.numeric_tolerance} onChange={e => setForm({ ...form, numeric_tolerance: Number(e.target.value) })} /></Field>}</div>}
     <div className="form-grid two"><Field label="Время на ответ"><div className="range-field"><input type="range" min="5" max="90" step="5" value={form.time_limit_seconds} onChange={e => setForm({ ...form, time_limit_seconds: Number(e.target.value) })} /><b>{form.time_limit_seconds} сек.</b></div></Field><label className="check-row compact"><input type="checkbox" checked={form.shuffle_options} onChange={e => setForm({ ...form, shuffle_options: e.target.checked })} /><span><b>Перемешивать варианты</b><small>Отдельно для каждого игрока</small></span></label></div><Field label="Пояснение после раскрытия"><textarea rows={2} value={form.explanation} onChange={e => setForm({ ...form, explanation: e.target.value })} placeholder="Добавьте историю или интересную деталь…" /></Field><div className="media-upload"><div><Upload size={20} /><span><b>{form.media_url ? 'Медиа добавлено' : 'Фото или аудио'}</b><small>JPG, PNG, WebP, MP3, M4A, OGG · до 25 МБ</small></span></div><label className="button button-secondary">{uploading ? <LoaderCircle className="spin" size={17} /> : <Upload size={17} />} Выбрать<input type="file" accept="image/jpeg,image/png,image/webp,audio/mpeg,audio/mp4,audio/ogg" hidden onChange={e => void upload(e.target.files?.[0])} /></label></div>{error && <p className="form-error">{error}</p>}<div className="form-actions"><Button onClick={() => void save()} disabled={saving || !form.text.trim()}><Save size={18} /> Сохранить вопрос</Button></div></Card>
+}
+
+function SharePanel({ event, session, onOpen, onChanged }: { event: EventData; session: Snapshot | null; onOpen: () => void; onChanged: () => void | Promise<void> }) {
+  const [mode, setMode] = useState(event.tv_display_mode)
+  const [chartStyle, setChartStyle] = useState(event.tv_chart_style)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState('')
+  useEffect(() => {
+    setMode(event.tv_display_mode)
+    setChartStyle(event.tv_chart_style)
+  }, [event.id, event.tv_display_mode, event.tv_chart_style])
+
+  const code = event.active_session_code && session?.session.join_code === event.active_session_code ? event.active_session_code : null
+  const screenUrl = code ? `${location.origin}/screen/${code}` : ''
+  const playerUrl = code ? `${location.origin}/join/${code}` : ''
+  const save = async (nextMode: EventData['tv_display_mode'], nextChart = chartStyle) => {
+    setBusy(true); setError('')
+    try {
+      const updated = await api.updateTvDisplay(event.id, { tv_display_mode: nextMode, tv_chart_style: nextChart })
+      setMode(updated.tv_display_mode); setChartStyle(updated.tv_chart_style)
+      await onChanged()
+    } catch (err) {
+      setMode(event.tv_display_mode); setChartStyle(event.tv_chart_style)
+      setError(err instanceof Error ? err.message : 'Не удалось сохранить режим телевизора')
+    } finally { setBusy(false) }
+  }
+  const copy = async (kind: string, value: string) => {
+    await navigator.clipboard.writeText(value); setCopied(kind)
+    window.setTimeout(() => setCopied(''), 1800)
+  }
+  const previewRows = [
+    { avatar: '🚀', name: 'Анатолий', answer: 'Вибраниум', color: '#ff6b6b', percent: 55 },
+    { avatar: '🌻', name: 'Аннашкур', answer: 'Адамантий', color: '#a78bfa', percent: 30 },
+    { avatar: '🦊', name: 'Лиса', answer: 'Уру', color: '#60a5fa', percent: 15 },
+  ]
+
+  return <div className="content-stack tv-share-page">
+    <section className="page-heading"><div><Badge tone="accent"><Share2 size={14} /> Share / ТВ</Badge><h2>Экран для гостей</h2><p>Выберите, сколько информации увидят участники на телевизоре во время вопроса.</p></div>{code ? <a className="button" href={`/screen/${code}`} target="_blank"><Monitor size={18} /> Открыть телевизор</a> : <Button onClick={onOpen}><Play size={18} /> Открыть комнату</Button>}</section>
+    <div className="tv-share-layout">
+      <div className="content-stack">
+        <Card className="tv-mode-card"><div className="section-title"><div><span className="overline">Режим показа</span><h3>Что видно на телевизоре</h3></div><Badge tone={mode === 'insights' ? 'accent' : 'neutral'}>{mode === 'insights' ? 'Информативный' : 'Обычный'}</Badge></div>
+          <div className="host-mode-switch">
+            <button className={mode === 'classic' ? 'active' : ''} disabled={busy} onClick={() => void save('classic')}><Monitor /><span><b>Обычный</b><small>Вопрос, варианты, таймер и число ответивших</small></span></button>
+            <button className={mode === 'insights' ? 'active' : ''} disabled={busy} onClick={() => void save('insights')}><BarChart3 /><span><b>Информативный</b><small>Имена, ответы и статистика в прямом эфире</small></span></button>
+          </div>
+          {mode === 'insights' && <div className="tv-privacy-note"><Users size={18} /><span><b>Ответы видны сразу</b><small>Игроки на экране увидят, кто и что выбрал, ещё до окончания времени.</small></span></div>}
+          {error && <p className="form-error">{error}</p>}
+        </Card>
+        {mode === 'insights' && <Card><div className="section-title"><div><span className="overline">Диаграммы</span><h3>Вид статистики</h3></div></div><div className="chart-style-switch">{([
+          ['both', 'Обе', 'Круговая и столбцы'], ['pie', 'Круговая', 'Доли ответов'], ['bar', 'Столбцы', 'Сравнение вариантов'],
+        ] as const).map(([value, title, text]) => <button key={value} className={chartStyle === value ? 'active' : ''} disabled={busy} onClick={() => void save('insights', value)}><BarChart3 /><span><b>{title}</b><small>{text}</small></span></button>)}</div></Card>}
+        <Card className="tv-share-links"><div className="section-title"><div><span className="overline">Ссылки комнаты</span><h3>{code ? `Комната ${code}` : 'Сначала откройте комнату'}</h3></div>{code && <Badge tone="success">В эфире</Badge>}</div>{code ? <><div className="tv-share-code"><QRCodeSVG value={playerUrl} size={124} bgColor="#fffaf3" fgColor="#151522" /><div><span>Код входа</span><strong>{code}</strong><small>QR ведёт на экран игрока</small></div></div><div className="share-link-row"><Monitor /><span><b>Телевизор</b><small>{screenUrl}</small></span><button onClick={() => void copy('screen', screenUrl)}>{copied === 'screen' ? <Check /> : <Copy />}</button><a href={screenUrl} target="_blank"><ExternalLink /></a></div><div className="share-link-row"><Smartphone /><span><b>Игроки</b><small>{playerUrl}</small></span><button onClick={() => void copy('player', playerUrl)}>{copied === 'player' ? <Check /> : <Copy />}</button><a href={playerUrl} target="_blank"><ExternalLink /></a></div></> : <div className="tv-no-room"><Monitor /><p>После открытия комнаты здесь появятся QR-код и отдельные ссылки для телевизора и игроков.</p><Button onClick={onOpen}><Play /> Открыть комнату</Button></div>}</Card>
+      </div>
+      <Card className="tv-share-preview-card"><div className="section-title"><div><span className="overline">Предпросмотр</span><h3>{mode === 'insights' ? 'Информативный экран' : 'Обычный экран'}</h3></div><Badge tone="neutral"><Monitor size={13} /> ТВ</Badge></div><div className={`tv-share-preview ${mode}`}><div className="tv-preview-meta"><span>Раунд 1</span><b>Вопрос 4 из 20</b></div><h4>Из какого металла сделан щит Капитана Америки?</h4>{mode === 'classic' ? <><div className="tv-preview-options"><span>A · Вибраниум</span><span>B · Адамантий</span><span>C · Уру</span><span>D · Титан</span></div><div className="tv-preview-progress"><Users /> Ответило 12 из 18 <i>18</i></div></> : <div className="tv-preview-insights"><div className="tv-preview-answers"><b>Кто как ответил</b>{previewRows.map(row => <span key={row.name}><i>{row.avatar}</i><em>{row.name}</em><strong>{row.answer}</strong></span>)}</div>{chartStyle !== 'bar' && <div className="tv-preview-donut"><i /><b>12<small>ответов</small></b></div>}{chartStyle !== 'pie' && <div className="tv-preview-bars">{previewRows.map(row => <span key={row.name}><b>{row.answer}</b><i><em style={{ width: `${row.percent}%`, background: row.color }} /></i><small>{row.percent}%</small></span>)}</div>}</div>}</div><p className="tv-preview-caption">Это пример. На настоящем экране данные обновляются после каждого ответа.</p></Card>
+    </div>
+  </div>
 }
 
 function RehearsalPanel({ event, session, onOpen }: { event: EventData; session: Snapshot | null; onOpen: () => void }) {

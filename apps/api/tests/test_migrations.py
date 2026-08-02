@@ -4,7 +4,7 @@ import sqlalchemy as sa
 from app.config import settings
 
 
-def test_host_control_migration_round_trip(tmp_path, monkeypatch):
+def test_event_control_migrations_round_trip(tmp_path, monkeypatch):
     database = tmp_path / "host-control.sqlite"
     database_url = f"sqlite:///{database.as_posix()}"
     config = Config("alembic.ini")
@@ -19,3 +19,5 @@ def test_host_control_migration_round_trip(tmp_path, monkeypatch):
     columns = {column["name"]: column for column in sa.inspect(engine).get_columns("events")}
     assert columns["host_mode"]["nullable"] is False
     assert columns["auto_advance_seconds"]["nullable"] is False
+    assert columns["tv_display_mode"]["nullable"] is False
+    assert columns["tv_chart_style"]["nullable"] is False

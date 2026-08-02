@@ -40,6 +40,7 @@ export const api = {
   selectEvent: (id: string) => request<EventData>(`/events/${id}/select`, { method: 'POST' }, true),
   updateEvent: (id: string, data: Partial<EventData>) => request<EventData>(`/events/${id}`, { method: 'PUT', body: JSON.stringify(data) }, true),
   updateHostControl: (id: string, data: Pick<EventData, 'host_mode' | 'auto_advance_seconds'>) => request<EventData>(`/events/${id}/host-control`, { method: 'PUT', body: JSON.stringify(data) }, true),
+  updateTvDisplay: (id: string, data: Pick<EventData, 'tv_display_mode' | 'tv_chart_style'>) => request<EventData>(`/events/${id}/tv-display`, { method: 'PUT', body: JSON.stringify(data) }, true),
   archiveEvent: (id: string) => request<{ status: string; selected_event_id?: string | null }>(`/events/${id}/archive`, { method: 'POST' }, true),
   restoreEvent: (id: string) => request<EventData>(`/events/${id}/restore`, { method: 'POST' }, true),
   addQuestionnaireItem: (eventId: string, text: string) => request(`/events/${eventId}/questionnaire/items`, { method: 'POST', body: JSON.stringify({ text, type: 'text' }) }, true),

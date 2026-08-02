@@ -28,6 +28,8 @@ class Event(Base):
     game_mode: Mapped[str] = mapped_column(String(16), default="individual")
     host_mode: Mapped[str] = mapped_column(String(16), default="auto", server_default="auto", nullable=False)
     auto_advance_seconds: Mapped[int] = mapped_column(Integer, default=5, server_default="5", nullable=False)
+    tv_display_mode: Mapped[str] = mapped_column(String(16), default="classic", server_default="classic", nullable=False)
+    tv_chart_style: Mapped[str] = mapped_column(String(16), default="both", server_default="both", nullable=False)
     theme: Mapped[dict] = mapped_column(JSON, default=lambda: {"accent": "#ff6b6b", "mode": "dark", "decor": "confetti"})
     hero_photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     allow_late_join: Mapped[bool] = mapped_column(Boolean, default=True)

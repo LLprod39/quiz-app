@@ -222,12 +222,74 @@ def answer_target_count(session: GameSession) -> int:
     return len(eligible)
 
 
+INSIGHT_COLORS = ["#ff6b6b", "#a78bfa", "#60a5fa", "#34d399", "#fbbf24", "#fb7185", "#22d3ee", "#c084fc"]
+
+
+def answer_label(question: Question, payload: Any) -> str:
+    if payload is None or payload == "":
+        return "Пропуск"
+    options = {str(option.id): option.text for option in question.options}
+    if isinstance(payload, list):
+        labels = [options.get(str(value), str(value)) for value in payload]
+        return ", ".join(labels) if labels else "Пропуск"
+    return options.get(str(payload), str(payload)).strip()[:120] or "Пропуск"
+
+
+def tv_answer_insights(session: GameSession, submissions: list[Submission]) -> tuple[list[dict], list[dict]]:
+    question = session.current_question
+    if session.event.tv_display_mode != "insights" or not question:
+        return [], []
+    participants = {participant.id: participant for participant in session.participants}
+    teams = {team.id: team for team in session.teams}
+    live_answers = []
+    for row in sorted(submissions, key=lambda item: item.submitted_at):
+        entity = teams.get(row.team_id) if row.team_id else participants.get(row.participant_id)
+        live_answers.append({
+            "id": row.id,
+            "name": entity.name if isinstance(entity, Team) else entity.full_name if isinstance(entity, Participant) else "Участник",
+            "avatar": getattr(entity, "avatar", "🎯"),
+            "answer": answer_label(question, row.answer_payload),
+            "submitted_at": iso_utc(row.submitted_at),
+        })
+
+    counts: dict[str, dict] = {}
+    if question.options:
+        for option in question.options:
+            counts[str(option.id)] = {"label": option.text, "count": 0}
+        for row in submissions:
+            values = row.answer_payload if isinstance(row.answer_payload, list) else [row.answer_payload]
+            for value in values:
+                key = str(value) if value is not None and value != "" else "__skip__"
+                if key not in counts:
+                    counts[key] = {"label": "Пропуск" if key == "__skip__" else str(value), "count": 0}
+                counts[key]["count"] += 1
+    else:
+        for row in submissions:
+            label = answer_label(question, row.answer_payload)
+            key = normalize_text(label) or "__skip__"
+            if key not in counts:
+                counts[key] = {"label": label, "count": 0}
+            counts[key]["count"] += 1
+
+    ordered = sorted(counts.values(), key=lambda item: (-item["count"], item["label"].casefold()))
+    total = sum(item["count"] for item in ordered)
+    breakdown = [{
+        "label": item["label"],
+        "count": item["count"],
+        "percent": round((item["count"] / total) * 100, 1) if total else 0,
+        "color": INSIGHT_COLORS[index % len(INSIGHT_COLORS)],
+    } for index, item in enumerate(ordered[:8])]
+    return live_answers, breakdown
+
+
 def session_snapshot(db: Session, session: GameSession, participant: Participant | None = None) -> dict:
     question_count = len(ordered_questions(session.event))
-    answered_count = 0
+    submissions = []
     if session.current_question_id:
         query = select(Submission).where(Submission.session_id == session.id, Submission.question_id == session.current_question_id)
-        answered_count = len(db.scalars(query).all())
+        submissions = list(db.scalars(query).all())
+    answered_count = len(submissions)
+    live_answers, answer_breakdown = tv_answer_insights(session, submissions)
     reveal = session.status in {"reveal", "finished", "archived"}
     ranking = leaderboard(db, session)
     private = None
@@ -267,9 +329,13 @@ def session_snapshot(db: Session, session: GameSession, participant: Participant
             "game_mode": session.event.game_mode,
             "host_mode": session.event.host_mode,
             "auto_advance_seconds": session.event.auto_advance_seconds,
+            "tv_display_mode": session.event.tv_display_mode,
+            "tv_chart_style": session.event.tv_chart_style,
             "theme": session.event.theme,
         },
         "question": public_question(session.current_question, reveal),
+        "live_answers": live_answers,
+        "answer_breakdown": answer_breakdown,
         "participants": [{
             "id": p.id,
             "name": p.full_name,

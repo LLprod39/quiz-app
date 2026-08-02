@@ -25,6 +25,14 @@ def test_vertical_game_flow():
 
         events = client.get("/api/events", headers=headers).json()
         assert events[0]["question_count"] == 3
+        tv_mode = client.put(
+            f"/api/events/{events[0]['id']}/tv-display",
+            headers=headers,
+            json={"tv_display_mode": "insights", "tv_chart_style": "both"},
+        )
+        assert tv_mode.status_code == 200
+        assert tv_mode.json()["tv_display_mode"] == "insights"
+        assert tv_mode.json()["tv_chart_style"] == "both"
 
         opened = client.post(f"/api/events/{events[0]['id']}/sessions", headers=headers)
         assert opened.status_code == 200
@@ -51,6 +59,17 @@ def test_vertical_game_flow():
         in_progress = client.get(f"/api/sessions/{code}").json()
         assert in_progress["session"]["status"] == "answering"
         assert in_progress["session"]["answered_count"] == 1
+        assert in_progress["event"]["tv_display_mode"] == "insights"
+        assert in_progress["live_answers"] == [{
+            "id": in_progress["live_answers"][0]["id"],
+            "name": "Анна",
+            "avatar": "🎈",
+            "answer": question["options"][1]["text"],
+            "submitted_at": in_progress["live_answers"][0]["submitted_at"],
+        }]
+        selected_breakdown = next(row for row in in_progress["answer_breakdown"] if row["label"] == question["options"][1]["text"])
+        assert selected_breakdown["count"] == 1
+        assert selected_breakdown["percent"] == 100.0
         second_answer = client.post(f"/api/sessions/{code}/answer", json={"device_token": second_token, "request_id": "request-2", "answer": question["options"][0]["id"]})
         assert second_answer.status_code == 200
         assert second_answer.json()["question_closed"] is True

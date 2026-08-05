@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { Snapshot } from '../types'
-import { api, wsUrl } from '../lib/api'
+import { api, screenWsUrl, wsUrl } from '../lib/api'
 
 interface GameStore {
   snapshot: Snapshot | null
@@ -8,6 +8,7 @@ interface GameStore {
   latency: number | null
   socket: WebSocket | null
   connect: (code: string, token?: string) => void
+  connectScreen: (token: string) => void
   refresh: (code: string, token?: string) => Promise<void>
   disconnect: () => void
 }
@@ -59,6 +60,36 @@ export const useGameStore = create<GameStore>((set, get) => ({
       if (get().socket !== socket) return
       set({ connection: 'offline', socket: null })
       window.setTimeout(() => get().connect(code, token), 1500)
+    }
+    set({ socket })
+  },
+  connectScreen: token => {
+    get().socket?.close()
+    set({ connection: 'connecting' })
+    void api.screenState(token).then(snapshot => set({ snapshot })).catch(() => undefined)
+    const socket = new WebSocket(screenWsUrl(token))
+    socket.onopen = () => { set({ connection: 'online' }); socket.send(JSON.stringify({ type: 'ping', sent_at: Date.now() })) }
+    socket.onmessage = event => {
+      const payload = JSON.parse(event.data)
+      if (payload.type === 'pong') set({ latency: Date.now() - Number(payload.sent_at) })
+      if (payload.type === 'session.snapshot') set({ snapshot: payload })
+      if (payload.type === 'participant.joined') {
+        const current = get().snapshot
+        if (current && !current.participants.some(item => item.id === payload.participant.id)) set({ snapshot: { ...current, version: payload.version, participants: [...current.participants, payload.participant] } })
+      }
+      if (payload.type === 'participant.ready') {
+        const current = get().snapshot
+        if (current) set({ snapshot: { ...current, version: payload.version, participants: current.participants.map(item => item.id === payload.participant_id ? { ...item, ready: true, latency_ms: payload.latency_ms } : item) } })
+      }
+      if (payload.type === 'question.progress') {
+        const current = get().snapshot
+        if (current) set({ snapshot: { ...current, version: payload.version, session: { ...current.session, answered_count: payload.answered_count, answer_target_count: payload.answer_target_count } } })
+      }
+    }
+    socket.onclose = () => {
+      if (get().socket !== socket) return
+      set({ connection: 'offline', socket: null })
+      window.setTimeout(() => get().connectScreen(token), 1500)
     }
     set({ socket })
   },

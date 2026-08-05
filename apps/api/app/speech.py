@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session, joinedload
 
 from .config import settings
 from .db import get_db
-from .models import GameSession
+from .models import GameSession, ScreenAccess
+from .security import token_hash
 
 
 router = APIRouter(prefix="/api/speech", tags=["speech"])
@@ -101,14 +102,17 @@ async def synthesize_microsoft_speech(
     return response.content, selected_voice
 
 
-@router.get("/sessions/{code}/questions/{question_id}")
-async def current_question_speech(code: str, question_id: str, db: Session = Depends(get_db)):
+@router.get("/screens/{screen_token}/questions/{question_id}")
+async def current_question_speech(screen_token: str, question_id: str, db: Session = Depends(get_db)):
     if not microsoft_speech_configured():
         raise HTTPException(503, "Microsoft Speech не настроен; используется локальная озвучка браузера")
+    access = db.scalar(select(ScreenAccess).where(ScreenAccess.token_hash == token_hash(screen_token), ScreenAccess.revoked_at.is_(None)))
+    if not access:
+        raise HTTPException(404, "Ссылка экрана недействительна")
     session = db.scalar(
         select(GameSession)
         .options(joinedload(GameSession.current_question))
-        .where(GameSession.join_code == code.upper())
+        .where(GameSession.id == access.session_id)
     )
     if not session:
         raise HTTPException(404, "Комната не найдена")

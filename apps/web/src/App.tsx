@@ -6,12 +6,16 @@ import { GuestPage } from './pages/GuestPage'
 import { ScreenPage } from './pages/ScreenPage'
 import { HeroPage } from './pages/HeroPage'
 import { QuizCatalogPage } from './pages/QuizCatalogPage'
+import { AccountPage } from './pages/AccountPage'
+import { ResetPasswordPage } from './pages/ResetPasswordPage'
 
 export default function App() {
   const { pathname, navigate } = useLocation()
   if (pathname === '/') return <HomePage />
   if (pathname === '/quizzes' || /^\/quiz\/[^/]+$/.test(pathname)) return <QuizCatalogPage />
   if (pathname === '/admin') return <OrganizerPage />
+  if (pathname === '/account') return <AccountPage />
+  if (/^\/reset-password\/[^/]+$/.test(pathname)) return <ResetPasswordPage />
   if (pathname === '/join' || /^\/join\/[^/]+$/.test(pathname)) return <JoinPage />
   if (/^\/play\/[^/]+$/.test(pathname)) return <GuestPage />
   if (/^\/screen\/[^/]+$/.test(pathname)) return <ScreenPage />

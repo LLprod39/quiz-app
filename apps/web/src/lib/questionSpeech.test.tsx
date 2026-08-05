@@ -138,7 +138,7 @@ describe('question speech', () => {
     act(() => result.current.setEnabled(true))
     await waitFor(() => expect(result.current.provider).toBe('microsoft'))
 
-    expect(fetchMock).toHaveBeenCalledWith('/api/speech/sessions/ABC123/questions/q-cloud', expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(fetchMock).toHaveBeenCalledWith('/api/speech/screens/ABC123/questions/q-cloud', expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(play).toHaveBeenCalledTimes(1)
     expect(speak).not.toHaveBeenCalled()
     expect(result.current.voiceName).toBe('ru-RU-SvetlanaNeural')

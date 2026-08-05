@@ -19,8 +19,10 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-quiz}:${POSTGRES_PASSWORD:-quiz-lan-only}@db:5432/${POSTGRES_DB:-quiz}
       SECRET_KEY: ${SECRET_KEY:-local-development-key-change-me}
-      ORGANIZER_EMAIL: ${ORGANIZER_EMAIL:-organizer@example.local}
-      ORGANIZER_PASSWORD: ${ORGANIZER_PASSWORD:-celebrate}
+      BOOTSTRAP_ADMIN_PHONE: ${BOOTSTRAP_ADMIN_PHONE:-+77000000000}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-celebrate}
+      BOOTSTRAP_ADMIN_NAME: ${BOOTSTRAP_ADMIN_NAME:-Системный администратор}
+      BOOTSTRAP_ADMIN_AVATAR: ${BOOTSTRAP_ADMIN_AVATAR:-👑}
       DEPLOYMENT_MODE: lan
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost}
       MEDIA_DIR: /data/media

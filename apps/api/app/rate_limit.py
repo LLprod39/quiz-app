@@ -12,6 +12,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     rules = (
         ("/api/auth/login", 30),
+        ("/api/auth/register", 10),
+        ("/api/auth/reset-password", 10),
         ("/join", 150),
         ("/answer", 600),
         ("/transfer-requests", 60),

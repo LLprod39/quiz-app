@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, false
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -15,9 +15,107 @@ def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Account(Base):
+    __tablename__ = "accounts"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    phone_e164: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(80))
+    avatar: Mapped[str] = mapped_column(String(500), default="🎈")
+    avatar_kind: Mapped[str] = mapped_column(String(16), default="preset")
+    password_hash: Mapped[str] = mapped_column(String(300))
+    role: Mapped[str] = mapped_column(String(20), default="user", index=True)
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sessions: Mapped[list["AuthSession"]] = relationship(back_populates="account", cascade="all, delete-orphan")
+    subscriptions: Mapped[list["Subscription"]] = relationship(back_populates="account", cascade="all, delete-orphan")
+    events: Mapped[list["Event"]] = relationship(back_populates="owner")
+    quiz_pack_templates: Mapped[list["QuizPackTemplate"]] = relationship(back_populates="owner")
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    csrf_token: Mapped[str] = mapped_column(String(100))
+    device_name: Mapped[str] = mapped_column(String(120), default="Браузер")
+    browser: Mapped[str] = mapped_column(String(80), default="Неизвестный браузер")
+    os: Mapped[str] = mapped_column(String(80), default="Неизвестная ОС")
+    user_agent: Mapped[str] = mapped_column(String(500), default="")
+    ip_address: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    account: Mapped[Account] = relationship(back_populates="sessions")
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class Plan(Base):
+    __tablename__ = "plans"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    code: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    description: Mapped[str] = mapped_column(String(500), default="")
+    price_minor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), default="KZT")
+    is_public: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    quotas: Mapped[dict] = mapped_column(JSON, default=dict)
+    provider_price_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+    subscriptions: Mapped[list["Subscription"]] = relationship(back_populates="plan")
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    plan_id: Mapped[str] = mapped_column(ForeignKey("plans.id"), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    source: Mapped[str] = mapped_column(String(20), default="manual")
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    provider_customer_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    provider_subscription_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+    account: Mapped[Account] = relationship(back_populates="subscriptions")
+    plan: Mapped[Plan] = relationship(back_populates="subscriptions")
+
+
+class GuestDevice(Base):
+    __tablename__ = "guest_devices"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    last_display_name: Mapped[str] = mapped_column(String(80), default="")
+    last_avatar: Mapped[str] = mapped_column(String(500), default="🎈")
+    browser: Mapped[str] = mapped_column(String(80), default="")
+    os: Mapped[str] = mapped_column(String(80), default="")
+    user_agent: Mapped[str] = mapped_column(String(500), default="")
+    ip_address: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class Event(Base):
     __tablename__ = "events"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
     title: Mapped[str] = mapped_column(String(160))
     event_format: Mapped[str] = mapped_column(String(20), default="celebration", server_default="celebration")
     topic: Mapped[str] = mapped_column(String(160), default="", server_default="")
@@ -35,6 +133,7 @@ class Event(Base):
     allow_late_join: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+    owner: Mapped[Account] = relationship(back_populates="events")
     rounds: Mapped[list["Round"]] = relationship(back_populates="event", cascade="all, delete-orphan", order_by="Round.sort_order")
     questionnaire: Mapped["Questionnaire | None"] = relationship(back_populates="event", cascade="all, delete-orphan", uselist=False)
     sessions: Mapped[list["GameSession"]] = relationship(back_populates="event", cascade="all, delete-orphan")
@@ -42,11 +141,16 @@ class Event(Base):
 
 class QuizPackTemplate(Base):
     __tablename__ = "quiz_pack_templates"
+    __table_args__ = (UniqueConstraint("owner_id", "slug", name="uq_quiz_pack_owner_slug"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
-    slug: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
+    slug: Mapped[str] = mapped_column(String(120), index=True)
     definition: Mapped[dict] = mapped_column(JSON)
+    visibility: Mapped[str] = mapped_column(String(16), default="private", index=True)
+    published_from_id: Mapped[str | None] = mapped_column(ForeignKey("quiz_pack_templates.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+    owner: Mapped[Account | None] = relationship(back_populates="quiz_pack_templates", foreign_keys=[owner_id])
 
 
 class Questionnaire(Base):
@@ -135,11 +239,13 @@ class GameSession(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deployment_mode: Mapped[str] = mapped_column(String(16), default="lan")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
     event: Mapped[Event] = relationship(back_populates="sessions")
     current_question: Mapped[Question | None] = relationship(foreign_keys=[current_question_id])
     participants: Mapped[list["Participant"]] = relationship(back_populates="session", cascade="all, delete-orphan")
     teams: Mapped[list["Team"]] = relationship(back_populates="session", cascade="all, delete-orphan")
     submissions: Mapped[list["Submission"]] = relationship(back_populates="session", cascade="all, delete-orphan")
+    screen_access: Mapped["ScreenAccess | None"] = relationship(back_populates="session", cascade="all, delete-orphan", uselist=False)
 
 
 class Team(Base):
@@ -158,6 +264,8 @@ class Participant(Base):
     __tablename__ = "participants"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     session_id: Mapped[str] = mapped_column(ForeignKey("game_sessions.id"))
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
+    guest_device_id: Mapped[str | None] = mapped_column(ForeignKey("guest_devices.id"), nullable=True, index=True)
     team_id: Mapped[str | None] = mapped_column(ForeignKey("teams.id"), nullable=True)
     display_name: Mapped[str] = mapped_column(String(80))
     patronymic_initial: Mapped[str] = mapped_column(String(1), default="")
@@ -174,6 +282,8 @@ class Participant(Base):
     connection_status: Mapped[str] = mapped_column(String(16), default="online")
     session: Mapped[GameSession] = relationship(back_populates="participants")
     team: Mapped[Team | None] = relationship(back_populates="participants", foreign_keys=[team_id])
+    account: Mapped[Account | None] = relationship(foreign_keys=[account_id])
+    guest_device: Mapped[GuestDevice | None] = relationship(foreign_keys=[guest_device_id])
 
     @property
     def full_name(self) -> str:
@@ -213,11 +323,52 @@ class DeviceTransfer(Base):
     participant: Mapped[Participant] = relationship()
 
 
+class ScreenAccess(Base):
+    __tablename__ = "screen_accesses"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    session_id: Mapped[str] = mapped_column(ForeignKey("game_sessions.id"), unique=True, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"))
+    generation: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    session: Mapped[GameSession] = relationship(back_populates="screen_access")
+    devices: Mapped[list["ScreenDevice"]] = relationship(back_populates="access", cascade="all, delete-orphan")
+
+
+class ScreenDevice(Base):
+    __tablename__ = "screen_devices"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    screen_access_id: Mapped[str] = mapped_column(ForeignKey("screen_accesses.id"), index=True)
+    installation_hash: Mapped[str] = mapped_column(String(64), index=True)
+    browser: Mapped[str] = mapped_column(String(80), default="")
+    os: Mapped[str] = mapped_column(String(80), default="")
+    user_agent: Mapped[str] = mapped_column(String(500), default="")
+    ip_address: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    access: Mapped[ScreenAccess] = relationship(back_populates="devices")
+
+
+class MediaAsset(Base):
+    __tablename__ = "media_assets"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    event_id: Mapped[str | None] = mapped_column(ForeignKey("events.id"), nullable=True, index=True)
+    url: Mapped[str] = mapped_column(String(500), unique=True)
+    path: Mapped[str] = mapped_column(String(500))
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    media_type: Mapped[str] = mapped_column(String(40), default="file")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     session_id: Mapped[str | None] = mapped_column(ForeignKey("game_sessions.id"), nullable=True)
     actor_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    actor_account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
+    target_account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"), nullable=True, index=True)
     action: Mapped[str] = mapped_column(String(80))
     before: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     after: Mapped[dict | None] = mapped_column(JSON, nullable=True)

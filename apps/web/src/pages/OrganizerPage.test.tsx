@@ -1,11 +1,11 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_BRANDING } from '../lib/branding'
 import { api } from '../lib/api'
 import { MemoryRouter } from '../lib/router'
 import { useGameStore } from '../store/game'
-import type { EventData, Snapshot } from '../types'
-import { LivePanel, PackCatalogPanel } from './OrganizerPage'
+import type { Account, EventData, Snapshot } from '../types'
+import { LivePanel, OrganizerPage, PackCatalogPanel } from './OrganizerPage'
 
 const event = {
   id: 'event-1', title: 'Тестовый квиз', event_format: 'battle', topic: 'Кино', hero_name: '', event_date: '', status: 'ready', is_selected: true,
@@ -29,6 +29,7 @@ function snapshot(status: Snapshot['session']['status']): Snapshot {
 }
 
 afterEach(() => {
+  cleanup()
   vi.restoreAllMocks()
   localStorage.clear()
   useGameStore.setState({ snapshot: null, connection: 'offline', latency: null, socket: null })
@@ -83,5 +84,32 @@ describe('PackCatalogPanel GPT builder', () => {
     await waitFor(() => expect(importTemplate).toHaveBeenCalledWith({ schema_version: 1, slug: 'countries-world' }))
     expect(await screen.findByText(/шаблон «страны мира» сохранён/i)).toBeInTheDocument()
     expect(screen.getByText('Мой шаблон')).toBeInTheDocument()
+  })
+})
+
+describe('OrganizerPage system section access', () => {
+  const organizerEvent = { ...event, active_session_code: null, latest_session_code: null }
+  const account = (role: Account['role']): Account => ({
+    id: `account-${role}`, phone: '+77000000000', display_name: 'Администратор', avatar: '👑',
+    avatar_kind: 'preset', role, status: 'active', created_at: new Date().toISOString(),
+  })
+
+  it('shows system management inside /admin for a superadmin', async () => {
+    vi.spyOn(api, 'me').mockResolvedValue(account('superadmin'))
+    vi.spyOn(api, 'events').mockResolvedValue([organizerEvent])
+
+    render(<MemoryRouter><OrganizerPage /></MemoryRouter>)
+
+    expect((await screen.findAllByRole('button', { name: 'Система' })).length).toBeGreaterThan(0)
+  })
+
+  it('does not expose system management to a regular account', async () => {
+    vi.spyOn(api, 'me').mockResolvedValue(account('user'))
+    const eventsRequest = vi.spyOn(api, 'events').mockResolvedValue([organizerEvent])
+
+    render(<MemoryRouter><OrganizerPage /></MemoryRouter>)
+    await waitFor(() => expect(eventsRequest).toHaveBeenCalled())
+
+    expect(screen.queryAllByRole('button', { name: 'Система' })).toHaveLength(0)
   })
 })

@@ -77,6 +77,12 @@ export function JoinPage() {
   useEffect(() => {
     if (routeCode) void loadRoom(routeCode);
   }, [routeCode]);
+  useEffect(() => {
+    void api.guestProfile().then(profile => {
+      if (profile.display_name) setName(profile.display_name)
+      if (profile.avatar && avatars.includes(profile.avatar)) setAvatar(profile.avatar)
+    }).catch(() => undefined)
+  }, [])
   const join = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!snapshot) return void loadRoom();

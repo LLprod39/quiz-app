@@ -1,4 +1,5 @@
-import type { EventData, Question, QuizPack, QuizPackDefinition, Snapshot, ThemeConfig } from '../types'
+import type { Account, AccountSession, EventData, Plan, PlanUsage, Question, QuizPack, QuizPackDefinition, Snapshot, SystemAccount, SystemDashboard, ThemeConfig } from '../types'
+import { guestDeviceToken, screenDeviceToken } from './device'
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
@@ -41,6 +42,10 @@ function issueMessage(issue: ValidationIssue): string {
 }
 
 export function formatApiErrorDetail(detail: unknown): string {
+  if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+    const quota = detail as { code?: string; limit?: string; current?: number; maximum?: number }
+    if (quota.code === 'quota_exceeded') return `Лимит тарифа «${quota.limit}» исчерпан: ${quota.current} из ${quota.maximum}`
+  }
   if (!Array.isArray(detail)) return typeof detail === 'string' ? detail : 'Ошибка запроса'
   const lines = [...new Set(detail.map(raw => {
     const issue = raw as ValidationIssue
@@ -51,8 +56,8 @@ export function formatApiErrorDetail(detail: unknown): string {
   return shown.join('\n') || 'Проверьте данные шаблона'
 }
 
-export async function fetchMicrosoftQuestionSpeech(code: string, questionId: string, signal?: AbortSignal) {
-  const response = await fetch(`${API_BASE}/speech/sessions/${encodeURIComponent(code)}/questions/${encodeURIComponent(questionId)}`, { signal })
+export async function fetchMicrosoftQuestionSpeech(screenToken: string, questionId: string, signal?: AbortSignal) {
+  const response = await fetch(`${API_BASE}/speech/screens/${encodeURIComponent(screenToken)}/questions/${encodeURIComponent(questionId)}`, { signal })
   if (!response.ok) return null
   return {
     audio: await response.blob(),
@@ -61,11 +66,11 @@ export async function fetchMicrosoftQuestionSpeech(code: string, questionId: str
 }
 
 async function request<T>(path: string, options: RequestInit = {}, admin = false): Promise<T> {
-  const token = localStorage.getItem('admin_token')
   const headers = new Headers(options.headers)
   if (!(options.body instanceof FormData)) headers.set('Content-Type', 'application/json')
-  if (admin && token) headers.set('Authorization', `Bearer ${token}`)
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers })
+  const csrf = document.cookie.split('; ').find(item => item.startsWith('quiz_csrf='))?.split('=').slice(1).join('=')
+  if (csrf && options.method && !['GET', 'HEAD', 'OPTIONS'].includes(options.method)) headers.set('X-CSRF-Token', decodeURIComponent(csrf))
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: 'include' })
   if (!response.ok) {
     const body = await response.json().catch(() => ({ detail: 'Ошибка соединения' }))
     const detail = body.detail
@@ -85,7 +90,23 @@ export const api = {
   updateQuizPackDefinition: (slug: string, data: QuizPackDefinition) => request<QuizPack>(`/quiz-packs/${encodeURIComponent(slug)}/definition`, { method: 'PUT', body: JSON.stringify(data) }, true),
   deleteQuizPack: (slug: string) => request<{ status: string; slug: string }>(`/quiz-packs/${encodeURIComponent(slug)}`, { method: 'DELETE' }, true),
   installQuizPack: (slug: string, replaceActive = false) => request<EventData>(`/quiz-packs/${encodeURIComponent(slug)}/install`, { method: 'POST', body: JSON.stringify({ replace_active: replaceActive }) }, true),
-  login: (email: string, password: string) => request<{ access_token: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+  register: (data: { phone: string; password: string; display_name: string; avatar: string }) => request<{ account: Account; csrf_token: string }>('/auth/register', { method: 'POST', body: JSON.stringify(data) }),
+  login: (phone: string, password: string) => request<{ account: Account; csrf_token: string }>('/auth/login', { method: 'POST', body: JSON.stringify({ phone, password }) }),
+  me: () => request<Account>('/auth/me'),
+  logout: () => request('/auth/logout', { method: 'POST' }),
+  logoutAll: () => request('/auth/logout-all', { method: 'POST' }),
+  changePassword: (current_password: string, new_password: string) => request('/auth/password', { method: 'PUT', body: JSON.stringify({ current_password, new_password }) }),
+  resetPassword: (token: string, new_password: string) => request('/auth/reset-password', { method: 'POST', body: JSON.stringify({ token, new_password }) }),
+  accountUsage: () => request<PlanUsage>('/account/usage'),
+  updateProfile: (data: { display_name: string; avatar?: string }) => request<Account>('/account/profile', { method: 'PUT', body: JSON.stringify(data) }),
+  uploadAvatar: (file: File) => { const body = new FormData(); body.append('file', file); return request<Account>('/account/avatar', { method: 'POST', body }) },
+  accountHistory: () => request<any[]>('/account/history'),
+  accountSessions: () => request<AccountSession[]>('/account/sessions'),
+  renameAccountSession: (id: string, device_name: string) => request<AccountSession>(`/account/sessions/${id}`, { method: 'PUT', body: JSON.stringify({ device_name }) }),
+  revokeAccountSession: (id: string) => request(`/account/sessions/${id}`, { method: 'DELETE' }),
+  publicPlans: () => request<Plan[]>('/plans'),
+  unclaimedResults: () => request<any[]>('/account/unclaimed-results', { headers: { 'X-Guest-Device-Token': guestDeviceToken() } }),
+  claimResults: () => request<{ count: number }>('/account/claim-results', { method: 'POST', headers: { 'X-Guest-Device-Token': guestDeviceToken() } }),
   events: () => request<EventData[]>('/events', {}, true),
   createEvent: (data: unknown) => request<EventData>('/events', { method: 'POST', body: JSON.stringify(data) }, true),
   selectEvent: (id: string) => request<EventData>(`/events/${id}/select`, { method: 'POST' }, true),
@@ -104,7 +125,8 @@ export const api = {
   deleteQuestion: (id: string) => request(`/questions/${id}`, { method: 'DELETE' }, true),
   openSession: (eventId: string) => request<Snapshot>(`/events/${eventId}/sessions`, { method: 'POST' }, true),
   snapshot: (code: string, token?: string) => request<Snapshot>(`/sessions/${code}${token ? `?device_token=${encodeURIComponent(token)}` : ''}`),
-  join: (code: string, data: unknown) => request<any>(`/sessions/${code}/join`, { method: 'POST', body: JSON.stringify(data) }),
+  guestProfile: () => request<{ display_name: string; avatar: string }>('/guest-device/profile', { headers: { 'X-Guest-Device-Token': guestDeviceToken() } }),
+  join: (code: string, data: unknown) => request<any>(`/sessions/${code}/join`, { method: 'POST', body: JSON.stringify(data), headers: { 'X-Guest-Device-Token': guestDeviceToken() } }),
   requestTransfer: (code: string, data: unknown) => request<{ request_id: string; claim_token: string }>(`/sessions/${code}/transfer-requests`, { method: 'POST', body: JSON.stringify(data) }),
   claimTransfer: (code: string, requestId: string, claimToken: string) => request<any>(`/sessions/${code}/transfer-requests/${requestId}/claim`, { method: 'POST', body: JSON.stringify({ claim_token: claimToken }) }),
   transferRequests: (code: string) => request<any[]>(`/sessions/${code}/transfer-requests`, {}, true),
@@ -114,11 +136,45 @@ export const api = {
   heroChoice: (code: string, data: unknown) => request(`/sessions/${code}/hero-choice`, { method: 'POST', body: JSON.stringify(data) }),
   action: (code: string, action: string) => request<Snapshot>(`/sessions/${code}/actions`, { method: 'POST', body: JSON.stringify({ action }) }, true),
   results: (code: string) => request<any>(`/sessions/${code}/results`, {}, true),
+  regenerateScreenAccess: (code: string) => request<{ screen_url: string; generation: number }>(`/sessions/${code}/screen-access`, { method: 'POST' }, true),
+  screenState: (token: string) => request<Snapshot>(`/screens/${encodeURIComponent(token)}`, { headers: { 'X-Screen-Installation': screenDeviceToken() } }),
+  screenDevices: (code: string) => request<any[]>(`/sessions/${code}/screens`, {}, true),
   upload: (eventId: string, file: File) => { const body = new FormData(); body.append('event_id', eventId); body.append('file', file); return request<{ url: string; type: string }>('/media', { method: 'POST', body }, true) },
+  mediaAssets: () => request<any[]>('/media-assets'),
+  deleteMediaAsset: (id: string) => request(`/media-assets/${id}`, { method: 'DELETE' }),
+  systemDashboard: () => request<SystemDashboard>('/system/dashboard'),
+  systemAccounts: (filters: { q?: string; status?: string; role?: string; plan?: string } | string = {}) => {
+    const values = typeof filters === 'string' ? { q: filters } : filters
+    const params = new URLSearchParams(Object.entries(values).filter(([, value]) => Boolean(value)) as [string, string][])
+    return request<SystemAccount[]>(`/system/accounts${params.size ? `?${params}` : ''}`)
+  },
+  systemAccount: (id: string) => request<any>(`/system/accounts/${id}`),
+  updateSystemAccount: (id: string, data: unknown) => request<SystemAccount>(`/system/accounts/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+  createResetLink: (id: string) => request<{ reset_url: string }>(`/system/accounts/${id}/reset-link`, { method: 'POST' }),
+  revokeSystemSession: (accountId: string, sessionId: string) => request(`/system/accounts/${accountId}/sessions/${sessionId}/revoke`, { method: 'POST' }),
+  systemPlans: () => request<Plan[]>('/system/plans'),
+  createSystemPlan: (data: unknown) => request<Plan>('/system/plans', { method: 'POST', body: JSON.stringify(data) }),
+  updateSystemPlan: (id: string, data: unknown) => request<Plan>(`/system/plans/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+  assignSubscription: (id: string, data: unknown) => request(`/system/accounts/${id}/subscription`, { method: 'POST', body: JSON.stringify(data) }),
+  systemQuizzes: () => request<any[]>('/system/quizzes'),
+  transferSystemQuiz: (id: string, owner_id: string) => request(`/system/quizzes/${id}/transfer`, { method: 'POST', body: JSON.stringify({ owner_id }) }),
+  archiveSystemQuiz: (id: string) => request(`/system/quizzes/${id}/archive`, { method: 'POST' }),
+  stopSystemSession: (id: string) => request(`/system/sessions/${id}/stop`, { method: 'POST' }),
+  systemTemplates: () => request<any[]>('/system/quiz-packs'),
+  publishSystemTemplate: (id: string) => request(`/system/quiz-packs/${id}/publish`, { method: 'POST' }),
+  unpublishSystemTemplate: (id: string) => request(`/system/quiz-packs/${id}/publication`, { method: 'DELETE' }),
+  systemDevices: () => request<any>('/system/devices'),
+  systemAudit: () => request<any[]>('/system/audit'),
 }
 
 export function wsUrl(code: string, token?: string): string {
   const explicit = import.meta.env.VITE_WS_BASE
   const base = explicit || `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`
   return `${base}/ws/${code}${token ? `?token=${encodeURIComponent(token)}` : ''}`
+}
+
+export function screenWsUrl(token: string): string {
+  const explicit = import.meta.env.VITE_WS_BASE
+  const base = explicit || `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}`
+  return `${base}/ws/screens/${encodeURIComponent(token)}`
 }

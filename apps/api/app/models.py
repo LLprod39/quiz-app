@@ -118,6 +118,7 @@ class Event(Base):
     owner_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
     title: Mapped[str] = mapped_column(String(160))
     event_format: Mapped[str] = mapped_column(String(20), default="celebration", server_default="celebration")
+    content_mode: Mapped[str] = mapped_column(String(16), default="quiz", server_default="quiz", nullable=False)
     topic: Mapped[str] = mapped_column(String(160), default="", server_default="")
     hero_name: Mapped[str] = mapped_column(String(100))
     event_date: Mapped[str] = mapped_column(String(20), default="")

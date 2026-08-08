@@ -213,6 +213,7 @@ async def upload_avatar(file: UploadFile = File(...), account: Account = Depends
         image = Image.open(io.BytesIO(content))
         if image.format not in {"JPEG", "PNG", "WEBP"}:
             raise ValueError("unsupported avatar format")
+        image = ImageOps.exif_transpose(image)
         image = ImageOps.fit(image.convert("RGB"), (512, 512), method=Image.Resampling.LANCZOS)
     except Exception as exc:
         raise HTTPException(400, "Поддерживаются JPEG, PNG и WebP") from exc

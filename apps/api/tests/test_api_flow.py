@@ -336,6 +336,7 @@ def test_custom_quiz_pack_prompt_crud_and_install():
         assert installed.status_code == 200
         installed_event = installed.json()
         assert installed_event["title"] == "Страны мира — обновлено"
+        assert installed_event["content_mode"] == "quiz"
         assert installed_event["question_count"] == 3
         assert installed_event["rounds"][0]["questions"][0]["time_limit_seconds"] == 25
 
@@ -349,6 +350,110 @@ def test_custom_quiz_pack_prompt_crud_and_install():
         pack["questions"][0]["wrong_answers"][0] = pack["questions"][0]["correct_answer"]
         invalid = client.post("/api/quiz-packs/import", headers=headers, json=pack)
         assert invalid.status_code == 422
+
+    engine.dispose()
+    if database.exists():
+        database.unlink()
+
+
+def test_content_modes_and_gpt_generated_survey_flow():
+    database = Path("test_api_flow.db")
+    engine.dispose()
+    if database.exists():
+        database.unlink()
+    with TestClient(app) as client:
+        login = client.post("/api/auth/login", json={"phone": "+77000000000", "password": "celebrate"})
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
+        seeded_event = client.get("/api/events", headers=headers).json()[0]
+
+        legacy_quiz = client.post(
+            "/api/events",
+            headers=headers,
+            json={"title": "Обычный квиз", "event_format": "battle", "topic": "Общие знания", "game_mode": "individual"},
+        )
+        assert legacy_quiz.status_code == 200
+        assert legacy_quiz.json()["content_mode"] == "quiz"
+
+        test_event = client.post(
+            "/api/events",
+            headers=headers,
+            json={"title": "Личный тест", "event_format": "battle", "content_mode": "test", "topic": "Навыки", "game_mode": "individual"},
+        )
+        assert test_event.status_code == 200
+        assert test_event.json()["content_mode"] == "test"
+        invalid_team_test = client.post(
+            "/api/events",
+            headers=headers,
+            json={"title": "Командный тест", "event_format": "battle", "content_mode": "test", "topic": "Навыки", "game_mode": "team"},
+        )
+        assert invalid_team_test.status_code == 422
+
+        prompt = client.post(
+            "/api/quiz-packs/gpt-prompt",
+            headers=headers,
+            json={"topic": "Обратная связь", "question_count": 3, "difficulty": "Средняя", "content_mode": "survey"},
+        )
+        assert prompt.status_code == 200
+        assert prompt.json()["content_mode"] == "survey"
+        assert '"content_mode": "survey"' in prompt.json()["prompt"]
+        assert "нет правильных ответов" in prompt.json()["prompt"]
+
+        survey_pack = {
+            "schema_version": 1,
+            "content_mode": "survey",
+            "slug": "event-feedback-survey",
+            "title": "Опрос после события",
+            "topic": "Обратная связь",
+            "icon": "💬",
+            "short_description": "Короткий опрос участников после мероприятия.",
+            "description": "Опрос помогает собрать впечатления участников и предложения для следующего события.",
+            "estimated_minutes": 8,
+            "difficulty": "Средняя",
+            "game_mode": "individual",
+            "round_title": "Ваше мнение",
+            "disclaimer": "В опросе нет правильных ответов.",
+            "sources": [],
+            "theme": {**seeded_event["theme"], "brand_name": "Ваше мнение", "logo_mark": "💬", "theme_preset": "feedback"},
+            "questions": [
+                {"type": "single", "text": "Как вам общая атмосфера события?", "options": ["Отлично", "Хорошо", "Можно лучше"], "time_limit_seconds": 30},
+                {"type": "text", "text": "Что вам понравилось больше всего?", "time_limit_seconds": 45},
+                {"type": "number", "text": "Какую оценку от 1 до 10 вы поставите?", "time_limit_seconds": 30},
+            ],
+        }
+        imported = client.post("/api/quiz-packs/import", headers=headers, json=survey_pack)
+        assert imported.status_code == 200
+        assert imported.json()["content_mode"] == "survey"
+
+        installed = client.post("/api/quiz-packs/event-feedback-survey/install", headers=headers, json={"replace_active": False})
+        assert installed.status_code == 200
+        survey_event = installed.json()
+        assert survey_event["content_mode"] == "survey"
+        assert survey_event["game_mode"] == "individual"
+        assert survey_event["rounds"][0]["questions"][0]["correct_answer"] is None
+        assert not any(option["is_correct"] for option in survey_event["rounds"][0]["questions"][0]["options"])
+
+        invalid_scored_question = client.post(
+            f"/api/events/{survey_event['id']}/questions",
+            headers=headers,
+            json={"round_id": survey_event["rounds"][0]["id"], "type": "single", "text": "Какой ответ правильный?", "correct_answer": "a", "options": [{"id": "a", "text": "Первый", "is_correct": True}, {"id": "b", "text": "Второй"}]},
+        )
+        assert invalid_scored_question.status_code == 400
+
+        opened = client.post(f"/api/events/{survey_event['id']}/sessions", headers=headers).json()
+        code = opened["session"]["join_code"]
+        joined = client.post(f"/api/sessions/{code}/join", json={"display_name": "Анна", "avatar": "🌻"}).json()
+        client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "prepare"})
+        started = client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "start"}).json()
+        answer_id = started["question"]["options"][0]["id"]
+        submitted = client.post(f"/api/sessions/{code}/answer", json={"device_token": joined["device_token"], "request_id": "survey-answer-1", "answer": answer_id})
+        assert submitted.status_code == 200
+        revealed = client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "reveal"})
+        assert revealed.status_code == 200
+        private = client.get(f"/api/sessions/{code}?device_token={joined['device_token']}").json()
+        assert "correct_answer" not in private["question"]
+        assert private["private_result"]["is_correct"] is None
+        finished = client.post(f"/api/sessions/{code}/actions", headers=headers, json={"action": "finish"}).json()
+        assert finished["leaderboard"] == []
 
     engine.dispose()
     if database.exists():

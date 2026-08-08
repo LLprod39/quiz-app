@@ -192,6 +192,42 @@ def test_avatar_is_normalized_and_old_history_reappears_on_pro():
     database.unlink(missing_ok=True)
 
 
+def test_avatar_applies_exif_orientation_before_normalizing():
+    database = reset_database()
+    avatar_path = None
+    with TestClient(app) as client:
+        registered = register(client, "+77000000009", "Orientation")
+        account_id = registered["account"]["id"]
+        headers = {"X-CSRF-Token": registered["csrf_token"]}
+
+        source_image = Image.new("RGB", (40, 40))
+        source_image.paste("red", (0, 0, 40, 20))
+        source_image.paste("blue", (0, 20, 40, 40))
+        exif = Image.Exif()
+        exif[274] = 3  # Rotate the stored pixels 180 degrees for display.
+        source = io.BytesIO()
+        source_image.save(source, "JPEG", quality=100, subsampling=0, exif=exif)
+
+        uploaded = client.post(
+            "/api/account/avatar",
+            headers=headers,
+            files={"file": ("oriented-avatar.jpg", source.getvalue(), "image/jpeg")},
+        )
+        assert uploaded.status_code == 200
+
+        avatar_path = settings.media_path / "avatars" / f"{account_id}.webp"
+        with Image.open(avatar_path) as normalized:
+            top = normalized.convert("RGB").getpixel((256, 64))
+            bottom = normalized.convert("RGB").getpixel((256, 448))
+            assert top[2] > top[0] + 100
+            assert bottom[0] > bottom[2] + 100
+
+    if avatar_path:
+        avatar_path.unlink(missing_ok=True)
+    engine.dispose()
+    database.unlink(missing_ok=True)
+
+
 def test_private_template_slug_namespace_is_isolated_per_owner():
     database = reset_database()
     with TestClient(app) as client:

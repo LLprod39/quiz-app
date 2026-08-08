@@ -7,6 +7,7 @@ import type { QuizPack } from '../types'
 import { QuizCatalogPage } from './QuizCatalogPage'
 
 const pack: QuizPack = {
+  content_mode: 'quiz',
   slug: 'marvel-universe', title: 'Marvel Quiz Battle', topic: 'Marvel', icon: '🦸',
   short_description: '20 вопросов о героях.', description: 'Готовый командный квиз о вселенной Marvel.',
   estimated_minutes: 35, difficulty: 'Средняя', round_title: 'Marvel',

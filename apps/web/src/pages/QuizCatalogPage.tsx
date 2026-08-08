@@ -7,10 +7,11 @@ import { Link, useNavigate, useParams } from '../lib/router'
 import type { QuizPack } from '../types'
 
 const difficultyLabels: Record<string, string> = { easy: 'Легко', medium: 'Средне', hard: 'Сложно' }
+const contentModeLabels = { quiz: 'Квиз', test: 'Тест', survey: 'Опрос' } as const
 
 export function QuizPackCard({ pack, action }: { pack: QuizPack; action?: ReactNode }) {
   return <Card className="quiz-pack-card" style={themeStyle(pack.theme)}>
-    <div className="quiz-pack-card-top"><span className="quiz-pack-icon">{pack.icon}</span><div className="quiz-pack-card-badges">{pack.is_custom && <Badge tone="success">Мой шаблон</Badge>}<Badge tone="accent">{difficultyLabels[pack.difficulty] || pack.difficulty}</Badge></div></div>
+    <div className="quiz-pack-card-top"><span className="quiz-pack-icon">{pack.icon}</span><div className="quiz-pack-card-badges">{pack.is_custom && <Badge tone="success">Мой шаблон</Badge>}<Badge tone="neutral">{contentModeLabels[pack.content_mode]}</Badge><Badge tone="accent">{difficultyLabels[pack.difficulty] || pack.difficulty}</Badge></div></div>
     <div><span className="quiz-pack-topic">{pack.topic}</span><h2>{pack.title}</h2><p>{pack.short_description}</p></div>
     <div className="quiz-pack-meta"><span><Gamepad2 size={15} /> {pack.question_count} вопросов</span><span><Clock3 size={15} /> ≈ {pack.estimated_minutes} мин.</span></div>
     <div className="quiz-pack-card-actions"><Link className="button button-secondary" to={`/quiz/${pack.slug}`}>Подробнее <ArrowRight size={16} /></Link>{action}</div>

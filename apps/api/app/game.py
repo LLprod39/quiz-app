@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
+from .content_modes import content_mode_policy
 from .models import AnswerOption, Event, GameSession, Participant, Question, Submission, Team
 from .speech_mvp import active_speech_version
 
@@ -75,8 +76,13 @@ def check_answer(question: Question, answer: Any) -> bool:
 
 def recalculate_submissions(db: Session, session: GameSession, question: Question | None = None) -> None:
     questions = [question] if question else ordered_questions(session.event)
+    policy = content_mode_policy(session.event.content_mode)
     for current in questions:
         rows = db.scalars(select(Submission).where(Submission.session_id == session.id, Submission.question_id == current.id)).all()
+        if not policy.scores_answers:
+            for row in rows:
+                row.is_correct = False
+            continue
         if current.type == "closest":
             numeric = []
             for row in rows:
@@ -191,7 +197,7 @@ def leaderboard(db: Session, session: GameSession) -> list[dict]:
     return raw
 
 
-def public_question(question: Question | None, reveal: bool = False) -> dict | None:
+def public_question(question: Question | None, reveal: bool = False, content_mode: str = "quiz") -> dict | None:
     if not question:
         return None
     options = list(question.options)
@@ -211,7 +217,7 @@ def public_question(question: Question | None, reveal: bool = False) -> dict | N
         "round_title": question.round.title,
         "options": [{"id": option.id, "text": option.text} for option in options],
     }
-    if reveal:
+    if reveal and content_mode_policy(content_mode).reveals_correct_answers:
         data["correct_answer"] = question.correct_answer
     return data
 
@@ -295,6 +301,7 @@ def session_snapshot(db: Session, session: GameSession, participant: Participant
     answered_count = len(submissions)
     live_answers, answer_breakdown = tv_answer_insights(session, submissions)
     reveal = session.status in {"reveal", "finished", "archived"}
+    policy = content_mode_policy(session.event.content_mode)
     ranking = leaderboard(db, session)
     private = None
     if participant:
@@ -307,7 +314,26 @@ def session_snapshot(db: Session, session: GameSession, participant: Participant
                 (Submission.team_id == rank_entity) if session.event.game_mode == "team" else (Submission.participant_id == rank_entity),
             ))
             if own:
-                private = {**(private or {}), "answer": own.answer_payload, "elapsed_ms": own.elapsed_ms, "is_correct": own.is_correct if reveal else None}
+                private = {**(private or {}), "answer": own.answer_payload, "elapsed_ms": own.elapsed_ms, "is_correct": own.is_correct if reveal and policy.scores_answers else None}
+        if private and session.event.content_mode == "test":
+            private = {
+                **private,
+                "rank": None,
+                "question_count": question_count,
+                "score_percent": round((private.get("correct_count", 0) / question_count) * 100, 1) if question_count else 0,
+            }
+        elif private and session.event.content_mode == "survey":
+            private = {
+                "id": private.get("id"),
+                "name": private.get("name"),
+                "avatar": private.get("avatar"),
+                "correct_count": 0,
+                "correct_time_ms": 0,
+                "rank": None,
+                "answer": private.get("answer"),
+                "elapsed_ms": private.get("elapsed_ms"),
+                "is_correct": None,
+            }
     return {
         "type": "session.snapshot",
         "version": session.state_version,
@@ -327,6 +353,7 @@ def session_snapshot(db: Session, session: GameSession, participant: Participant
             "id": session.event.id,
             "title": session.event.title,
             "event_format": session.event.event_format,
+            "content_mode": session.event.content_mode,
             "topic": session.event.topic,
             "hero_name": session.event.hero_name,
             "hero_photo_url": session.event.hero_photo_url,
@@ -337,7 +364,7 @@ def session_snapshot(db: Session, session: GameSession, participant: Participant
             "tv_chart_style": session.event.tv_chart_style,
             "theme": session.event.theme,
         },
-        "question": public_question(session.current_question, reveal),
+        "question": public_question(session.current_question, reveal, session.event.content_mode),
         "live_answers": live_answers,
         "answer_breakdown": answer_breakdown,
         "participants": [{
@@ -353,5 +380,5 @@ def session_snapshot(db: Session, session: GameSession, participant: Participant
         } for p in session.participants],
         "teams": [{"id": t.id, "name": t.name, "avatar": t.avatar, "color": t.color, "captain_participant_id": t.captain_participant_id} for t in session.teams],
         "private_result": private,
-        "leaderboard": ranking if session.status in {"finished", "archived"} else [],
+        "leaderboard": ranking if policy.shows_public_leaderboard and session.status in {"finished", "archived"} else [],
     }

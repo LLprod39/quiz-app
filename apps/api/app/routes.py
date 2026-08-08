@@ -13,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
+from .content_modes import content_mode_policy, validate_question_for_mode
 from .db import get_db
 from .game import MAX_QUESTIONS, answer_target_count, auto_transition_deadline, bump_version, check_answer, generate_join_code, iso_utc, leaderboard, ordered_questions, recalculate_submissions, session_snapshot, utcnow
 from .models import (
@@ -104,6 +105,7 @@ class ThemeBody(BaseModel):
 class EventBody(BaseModel):
     title: str = Field(min_length=2, max_length=160)
     event_format: Literal["celebration", "battle"] = "celebration"
+    content_mode: Literal["quiz", "test", "survey"] = "quiz"
     topic: str = Field(default="", max_length=160)
     hero_name: str = Field(default="", max_length=100)
     event_date: str = ""
@@ -126,6 +128,8 @@ class EventBody(BaseModel):
             raise ValueError("Укажите имя героя праздника")
         if self.event_format == "battle" and not self.topic:
             raise ValueError("Укажите тему квиз-баттла")
+        if self.content_mode != "quiz" and self.game_mode != "individual":
+            raise ValueError("Тесты и опросы доступны только в личном режиме")
         return self
 
 
@@ -147,6 +151,7 @@ class PackPromptBody(BaseModel):
     topic: str = Field(min_length=2, max_length=120)
     question_count: int = Field(default=20, ge=3, le=MAX_QUESTIONS)
     difficulty: Literal["Лёгкая", "Средняя", "Сложная"] = "Средняя"
+    content_mode: Literal["quiz", "test", "survey"] = "quiz"
 
 
 class PackSourceBody(BaseModel):
@@ -167,11 +172,13 @@ class PackSourceBody(BaseModel):
 
 
 class PackQuestionImportBody(BaseModel):
+    type: Literal["single", "multiple", "text", "number"] = "single"
     text: str = Field(min_length=5, max_length=500)
-    correct_answer: str = Field(min_length=1, max_length=300)
-    wrong_answers: list[str] = Field(min_length=3, max_length=3)
-    explanation: str = Field(min_length=5, max_length=1000)
-    source_urls: list[HttpUrl] = Field(min_length=1, max_length=5)
+    correct_answer: str | None = Field(default=None, max_length=300)
+    wrong_answers: list[str] = Field(default_factory=list, max_length=3)
+    options: list[str] = Field(default_factory=list, max_length=6)
+    explanation: str = Field(default="", max_length=1000)
+    source_urls: list[HttpUrl] = Field(default_factory=list, max_length=5)
     time_limit_seconds: int = Field(default=30, ge=10, le=120)
 
     @model_validator(mode="before")
@@ -186,20 +193,17 @@ class PackQuestionImportBody(BaseModel):
         return normalized
 
     @model_validator(mode="after")
-    def validate_answers(self):
+    def normalize_question(self):
         self.text = self.text.strip()
-        self.correct_answer = self.correct_answer.strip()
+        self.correct_answer = self.correct_answer.strip() if self.correct_answer is not None else None
         self.wrong_answers = [answer.strip() for answer in self.wrong_answers]
-        answers = [self.correct_answer, *self.wrong_answers]
-        if any(not answer for answer in answers):
-            raise ValueError("Все варианты ответа должны быть заполнены")
-        if len({answer.casefold() for answer in answers}) != 4:
-            raise ValueError("Правильный и три неверных ответа должны отличаться")
+        self.options = [answer.strip() for answer in self.options]
         return self
 
 
 class QuizPackImportBody(BaseModel):
     schema_version: Literal[1] = 1
+    content_mode: Literal["quiz", "test", "survey"] = "quiz"
     slug: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$", min_length=3, max_length=120)
     title: str = Field(min_length=2, max_length=160)
     topic: str = Field(min_length=2, max_length=160)
@@ -211,7 +215,7 @@ class QuizPackImportBody(BaseModel):
     game_mode: Literal["individual", "team"] = "team"
     round_title: str = Field(min_length=2, max_length=120)
     disclaimer: str = Field(min_length=5, max_length=500)
-    sources: list[PackSourceBody] = Field(min_length=1, max_length=12)
+    sources: list[PackSourceBody] = Field(default_factory=list, max_length=12)
     theme: ThemeBody
     questions: list[PackQuestionImportBody] = Field(min_length=3, max_length=MAX_QUESTIONS)
 
@@ -222,14 +226,40 @@ class QuizPackImportBody(BaseModel):
         self.round_title = self.round_title.strip()
         if len({question.text.casefold() for question in self.questions}) != len(self.questions):
             raise ValueError("В шаблоне есть повторяющиеся вопросы")
+        if self.content_mode != "quiz" and self.game_mode != "individual":
+            raise ValueError("Тесты и опросы создаются только в личном режиме")
+        if self.content_mode == "survey":
+            for question in self.questions:
+                if question.correct_answer not in (None, "") or question.wrong_answers:
+                    raise ValueError("В вопросах опроса не должно быть правильных и неправильных ответов")
+                if question.type in {"single", "multiple"}:
+                    if not 2 <= len(question.options) <= 6 or any(not option for option in question.options):
+                        raise ValueError("Вопрос опроса с выбором должен содержать от 2 до 6 вариантов")
+                    if len({option.casefold() for option in question.options}) != len(question.options):
+                        raise ValueError("Варианты ответа в вопросе опроса должны отличаться")
+                elif question.options:
+                    raise ValueError("У текстового или числового вопроса опроса не должно быть вариантов")
+        else:
+            if not self.sources:
+                raise ValueError("Добавьте источники к вопросам")
+            for question in self.questions:
+                if question.type != "single":
+                    raise ValueError("GPT-шаблоны квизов и тестов пока поддерживают вопросы с одним ответом")
+                answers = [question.correct_answer or "", *question.wrong_answers]
+                if len(question.wrong_answers) != 3 or any(not answer for answer in answers):
+                    raise ValueError("Все варианты ответа должны быть заполнены")
+                if len({answer.casefold() for answer in answers}) != 4:
+                    raise ValueError("Правильный и три неверных ответа должны отличаться")
+                if len(question.explanation.strip()) < 5 or not question.source_urls:
+                    raise ValueError("Для каждого вопроса нужны пояснение и источник")
         colors = [self.theme.accent, self.theme.secondary, self.theme.background, self.theme.panel, self.theme.panel_2, self.theme.text, self.theme.muted]
         if any(not re.fullmatch(r"#[0-9a-fA-F]{6}", color) for color in colors):
             raise ValueError("Все цвета темы должны быть в формате HEX, например #22c55e")
         declared_sources = {str(source.url).rstrip("/") for source in self.sources}
         referenced_sources = {str(url).rstrip("/") for question in self.questions for url in question.source_urls}
-        if not referenced_sources:
+        if self.content_mode != "survey" and not referenced_sources:
             raise ValueError("Добавьте источники к вопросам")
-        if not all(any(reference.startswith(source) or source.startswith(reference) for source in declared_sources) for reference in referenced_sources):
+        if referenced_sources and not all(any(reference.startswith(source) or source.startswith(reference) for source in declared_sources) for reference in referenced_sources):
             raise ValueError("Ссылки вопросов должны относиться к указанным источникам")
         return self
 
@@ -399,7 +429,7 @@ def serialize_event(event: Event) -> dict:
     ordered_sessions = sorted(event.sessions, key=lambda item: (item.status not in {"finished", "archived"}, session_time(item)), reverse=True)
     active = next((s for s in ordered_sessions if s.status not in {"finished", "archived"}), None)
     return {
-        "id": event.id, "title": event.title, "event_format": event.event_format, "topic": event.topic,
+        "id": event.id, "title": event.title, "event_format": event.event_format, "content_mode": event.content_mode, "topic": event.topic,
         "hero_name": event.hero_name, "event_date": event.event_date,
         "status": event.status, "is_selected": event.is_selected, "game_mode": event.game_mode,
         "host_mode": event.host_mode, "auto_advance_seconds": event.auto_advance_seconds,
@@ -536,8 +566,10 @@ def list_quiz_packs(account: Account | None = Depends(optional_account), db: Ses
 @router.post("/quiz-packs/gpt-prompt")
 def create_quiz_pack_prompt(body: PackPromptBody, account: Account = Depends(require_admin)):
     topic = body.topic.strip()
+    mode_title = {"quiz": "квиз-баттл", "test": "тест", "survey": "опрос"}[body.content_mode]
     example = {
         "schema_version": 1,
+        "content_mode": body.content_mode,
         "slug": "short-english-slug",
         "title": f"Квиз: {topic}",
         "topic": topic,
@@ -546,7 +578,7 @@ def create_quiz_pack_prompt(body: PackPromptBody, account: Account = Depends(req
         "description": "Расширенное описание игры и того, какие знания она проверяет.",
         "estimated_minutes": max(10, round(body.question_count * 1.7)),
         "difficulty": body.difficulty,
-        "game_mode": "team",
+        "game_mode": "team" if body.content_mode == "quiz" else "individual",
         "round_title": topic,
         "disclaimer": "Факты проверены по перечисленным источникам; формулировки вопросов оригинальные.",
         "sources": [{
@@ -574,13 +606,41 @@ def create_quiz_pack_prompt(body: PackPromptBody, account: Account = Depends(req
             "time_limit_seconds": 30,
         }],
     }
-    prompt = f"""Создай готовый квиз-баттл на русском языке по теме «{topic}».
+    if body.content_mode == "survey":
+        example.update({
+            "title": f"Опрос: {topic}",
+            "short_description": "Короткое описание опроса и его аудитории в одном предложении.",
+            "description": "Расширенное описание цели опроса и того, как будут использоваться ответы.",
+            "disclaimer": "В опросе нет правильных ответов; результаты отражают мнения участников.",
+            "sources": [],
+        })
+        example["questions"] = [{
+            "type": "single",
+            "text": "Однозначно сформулированный вопрос о мнении или предпочтении?",
+            "options": ["Вариант 1", "Вариант 2", "Вариант 3"],
+            "correct_answer": None,
+            "wrong_answers": [],
+            "explanation": "",
+            "source_urls": [],
+            "time_limit_seconds": 30,
+        }]
+        research_rule = "Составь нейтральные вопросы без навязывания ответа. Не добавляй правильные ответы, оценивание и соревновательные формулировки."
+        question_rule = f"Создай ровно {body.question_count} разных вопросов опроса. Используй type single или multiple с массивом options из 2–6 вариантов, либо type text/number без options."
+        source_rule = "Для субъективных вопросов используй пустые sources и source_urls. Если вопрос опирается на факт, проверь его и укажи прямую HTTPS-ссылку."
+    else:
+        if body.content_mode == "test":
+            example["title"] = f"Тест: {topic}"
+            example["game_mode"] = "individual"
+        research_rule = "Используй веб-поиск и проверь каждый факт минимум по одному надёжному источнику. Предпочитай официальные сайты, международные организации, государственные и научные ресурсы, энциклопедии с редакционным контролем."
+        question_rule = f"Создай ровно {body.question_count} разных вопросов сложности «{body.difficulty}». Для каждого вопроса дай один правильный и ровно три правдоподобных неверных ответа."
+        source_rule = "У каждого вопроса в source_urls должны быть прямые HTTPS-ссылки на страницы, подтверждающие именно этот факт. В sources перечисли все использованные сайты и реальные условия их использования или лицензии. Поле license сделай кратким — не более 300 символов."
+    prompt = f"""Создай готовый {mode_title} на русском языке по теме «{topic}».
 
 Требования:
-1. Используй веб-поиск и проверь каждый факт минимум по одному надёжному источнику. Предпочитай официальные сайты, международные организации, государственные и научные ресурсы, энциклопедии с редакционным контролем.
-2. Создай ровно {body.question_count} разных вопросов сложности «{body.difficulty}». Для каждого вопроса дай один правильный и ровно три правдоподобных неверных ответа.
+1. {research_rule}
+2. {question_rule}
 3. Формулировки вопросов и пояснений должны быть оригинальными. Не копируй готовые вопросы из коммерческих викторин.
-4. У каждого вопроса в source_urls должны быть прямые HTTPS-ссылки на страницы, подтверждающие именно этот факт. В sources перечисли все использованные сайты и реальные условия их использования или лицензии. Поле license сделай кратким — не более 300 символов.
+4. {source_rule}
 5. Не используй спорные, быстро устаревающие или неоднозначные факты. Если факт зависит от даты, явно укажи дату в вопросе.
 6. Подбери уникальное оформление темы: читаемые контрастные HEX-цвета, короткие тексты и подходящий emoji. В поле decor используй строго одно из четырёх значений: "confetti", "glow", "minimal" или "neon". Не придумывай другие значения и не добавляй к ним приставки.
 7. Все поля url, license_url и source_urls должны содержать только обычную строку, начинающуюся с https://. Никогда не оформляй ссылку как Markdown: запрещены [текст](https://...), [[https://...](https://...)](https://...), HTML-теги и ссылки с подписью.
@@ -592,7 +652,7 @@ def create_quiz_pack_prompt(body: PackPromptBody, account: Account = Depends(req
 Точная структура JSON (в массиве questions создай ровно {body.question_count} объектов по этому образцу):
 {json.dumps(example, ensure_ascii=False, indent=2)}
 """
-    return {"prompt": prompt, "topic": topic, "question_count": body.question_count}
+    return {"prompt": prompt, "topic": topic, "question_count": body.question_count, "content_mode": body.content_mode}
 
 
 @router.post("/quiz-packs/import")
@@ -663,25 +723,38 @@ def install_quiz_pack(slug: str, body: PackInstallBody, account: Account = Depen
     question_limit = quota_limit(db, account, "questions_per_quiz")
     if question_limit is not None and len(pack["questions"]) > question_limit:
         enforce_quota(db, account, "questions_per_quiz", 0, len(pack["questions"]))
+    content_mode = pack.get("content_mode", "quiz")
     event = Event(
         owner_id=account.id,
         title=pack["title"], event_format="battle", topic=pack["topic"], hero_name="", event_date="",
-        status="draft", is_selected=True, game_mode=pack.get("game_mode", "team"), allow_late_join=True, hero_photo_url=None,
+        content_mode=content_mode,
+        status="draft", is_selected=True, game_mode=pack.get("game_mode", "team") if content_mode == "quiz" else "individual", allow_late_join=True, hero_photo_url=None,
         theme=ThemeBody(**pack["theme"]).model_dump(),
     )
     round_ = Round(title=pack["round_title"], sort_order=0)
     event.rounds.append(round_)
     for question_index, item in enumerate(pack["questions"]):
-        answers = item.get("answers") or [item["correct_answer"], *item["wrong_answers"]]
-        correct_id = uid()
-        question = Question(
-            type="single", text=item["text"], time_limit_seconds=item.get("time_limit_seconds", 30), correct_answer=correct_id,
-            shuffle_options=True, explanation=item["explanation"], sort_order=question_index,
-        )
-        question.options = [
-            AnswerOption(id=correct_id if answer_index == 0 else uid(), text=answer, is_correct=answer_index == 0, sort_order=answer_index)
-            for answer_index, answer in enumerate(answers)
-        ]
+        if content_mode == "survey":
+            answers = item.get("options") or []
+            question = Question(
+                type=item.get("type", "single"), text=item["text"], time_limit_seconds=item.get("time_limit_seconds", 30), correct_answer=None,
+                accepted_answers=[], shuffle_options=bool(answers), explanation=item.get("explanation", ""), sort_order=question_index,
+            )
+            question.options = [
+                AnswerOption(id=uid(), text=answer, is_correct=False, sort_order=answer_index)
+                for answer_index, answer in enumerate(answers)
+            ]
+        else:
+            answers = item.get("answers") or [item["correct_answer"], *item["wrong_answers"]]
+            correct_id = uid()
+            question = Question(
+                type="single", text=item["text"], time_limit_seconds=item.get("time_limit_seconds", 30), correct_answer=correct_id,
+                shuffle_options=True, explanation=item["explanation"], sort_order=question_index,
+            )
+            question.options = [
+                AnswerOption(id=correct_id if answer_index == 0 else uid(), text=answer, is_correct=answer_index == 0, sort_order=answer_index)
+                for answer_index, answer in enumerate(answers)
+            ]
         round_.questions.append(question)
     db.add(event)
     db.flush()
@@ -727,6 +800,18 @@ def update_event(event_id: str, body: EventBody, account: Account = Depends(requ
     event = find_owned_event(db, event_id, account)
     if body.event_format == "battle" and any(question.type == "hero_choice" for question in ordered_questions(event)):
         raise HTTPException(400, "Сначала удалите вопросы типа «Выбор героя»")
+    if body.content_mode == "survey":
+        try:
+            for question in ordered_questions(event):
+                validate_question_for_mode(
+                    body.content_mode,
+                    question.type,
+                    question.correct_answer,
+                    question.accepted_answers,
+                    list(question.options),
+                )
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
     for key, value in body.model_dump().items(): setattr(event, key, value)
     if body.event_format == "celebration" and not event.questionnaire:
         event.questionnaire = Questionnaire(items=[
@@ -871,7 +956,15 @@ def questionnaire_to_question(item_id: str, account: Account = Depends(require_a
     enforce_question_count(db, account, event)
     if len(ordered_questions(event)) >= MAX_QUESTIONS: raise HTTPException(400, f"В викторине уже {MAX_QUESTIONS} вопросов")
     round_ = event.rounds[0] if event.rounds else Round(title="Раунд 1", sort_order=0, event=event)
-    question = Question(text=item.text, type="text", correct_answer=item.response.value, accepted_answers=[], sort_order=len(round_.questions), explanation=f"Ответ {event.hero_name}: {item.response.value}")
+    is_survey = event.content_mode == "survey"
+    question = Question(
+        text=item.text,
+        type="text",
+        correct_answer=None if is_survey else item.response.value,
+        accepted_answers=[],
+        sort_order=len(round_.questions),
+        explanation="" if is_survey else f"Ответ {event.hero_name}: {item.response.value}",
+    )
     round_.questions.append(question); db.flush()
     db.add(AuditLog(actor_account_id=account.id, target_account_id=account.id, action="questionnaire.item.converted", after={"event_id": event.id, "item_id": item.id, "question_id": question.id}))
     db.commit()
@@ -883,6 +976,10 @@ def create_question(event_id: str, body: QuestionBody, account: Account = Depend
     event = find_owned_event(db, event_id, account)
     if event.event_format == "battle" and body.type == "hero_choice":
         raise HTTPException(400, "В тематическом баттле нет типа «Выбор героя»")
+    try:
+        validate_question_for_mode(event.content_mode, body.type, body.correct_answer, body.accepted_answers, body.options)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     if len(ordered_questions(event)) >= MAX_QUESTIONS: raise HTTPException(400, f"В викторине может быть не более {MAX_QUESTIONS} вопросов")
     enforce_question_count(db, account, event)
     round_ = next((r for r in event.rounds if r.id == body.round_id), None)
@@ -913,6 +1010,10 @@ def update_question(question_id: str, body: QuestionBody, account: Account = Dep
         raise HTTPException(404, "Вопрос не найден")
     if event and event.event_format == "battle" and body.type == "hero_choice":
         raise HTTPException(400, "В тематическом баттле нет типа «Выбор героя»")
+    try:
+        validate_question_for_mode(event.content_mode, body.type, body.correct_answer, body.accepted_answers, body.options)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     before = serialize_question(question)
     for key, value in body.model_dump(exclude={"round_id", "round_title", "options"}).items(): setattr(question, key, value)
     db.execute(delete(AnswerOption).where(AnswerOption.question_id == question.id))
@@ -1245,6 +1346,8 @@ def delete_question_speech_version(
 @router.post("/events/{event_id}/question-presets")
 def add_question_presets(event_id: str, account: Account = Depends(require_admin), db: Session = Depends(get_db)):
     event = find_owned_event(db, event_id, account)
+    if not content_mode_policy(event.content_mode).scores_answers:
+        raise HTTPException(400, "Готовые вопросы с правильными ответами недоступны для опроса")
     lock_account_quota(db, account)
     plan_limit = quota_limit(db, account, "questions_per_quiz")
     current = db.scalar(select(func.count()).select_from(Question).join(Round).where(Round.event_id == event.id)) or 0
@@ -1337,7 +1440,7 @@ def get_session(code: str, device_token: str | None = None, account: Account | N
     return {
         "type": "room.join_info",
         "session": {"join_code": session.join_code, "status": session.status, "deployment_mode": session.deployment_mode},
-        "event": {"title": session.event.title, "event_format": session.event.event_format, "topic": session.event.topic, "hero_name": session.event.hero_name, "game_mode": session.event.game_mode, "theme": normalize_theme(session.event.theme)},
+        "event": {"title": session.event.title, "event_format": session.event.event_format, "content_mode": session.event.content_mode, "topic": session.event.topic, "hero_name": session.event.hero_name, "game_mode": session.event.game_mode, "theme": normalize_theme(session.event.theme)},
         "teams": [{"id": team.id, "name": team.name, "avatar": team.avatar, "color": team.color} for team in session.teams],
         "participant_count": len(session.participants),
     }
@@ -1513,7 +1616,8 @@ def submit_answer(code: str, body: AnswerBody, background_tasks: BackgroundTasks
         if team.captain_participant_id != participant.id: raise HTTPException(403, "Ответ отправляет капитан команды")
     started = (deadline - timedelta(seconds=session.current_question.time_limit_seconds)) if deadline else now
     elapsed_ms = max(0, int((now - started).total_seconds() * 1000))
-    submission = Submission(request_id=body.request_id, session_id=session.id, question_id=session.current_question_id, participant_id=None if session.event.game_mode == "team" else participant.id, team_id=participant.team_id if session.event.game_mode == "team" else None, answer_payload=body.answer, elapsed_ms=elapsed_ms, is_correct=check_answer(session.current_question, body.answer))
+    policy = content_mode_policy(session.event.content_mode)
+    submission = Submission(request_id=body.request_id, session_id=session.id, question_id=session.current_question_id, participant_id=None if session.event.game_mode == "team" else participant.id, team_id=participant.team_id if session.event.game_mode == "team" else None, answer_payload=body.answer, elapsed_ms=elapsed_ms, is_correct=policy.scores_answers and check_answer(session.current_question, body.answer))
     db.add(submission); db.flush()
     answered_count = db.scalar(select(func.count()).select_from(Submission).where(Submission.session_id == session.id, Submission.question_id == session.current_question_id))
     target_count = answer_target_count(session)
@@ -1589,6 +1693,8 @@ async def game_action(code: str, body: ActionBody, account: Account = Depends(re
 async def change_correct_answer(code: str, question_id: str, body: CorrectAnswerBody, account: Account = Depends(require_admin), db: Session = Depends(get_db)):
     session = find_owned_session(db, code, account); question = db.get(Question, question_id)
     if not question or question.round.event_id != session.event_id: raise HTTPException(404, "Вопрос не найден")
+    if not content_mode_policy(session.event.content_mode).scores_answers:
+        raise HTTPException(400, "В опросе нет правильных ответов")
     before = question.correct_answer; question.correct_answer = body.correct_answer; recalculate_submissions(db, session, question); session.state_version += 1
     db.add(AuditLog(session_id=session.id, actor_account_id=account.id, target_account_id=account.id, action="question.correct_answer.update", before={"correct_answer": before}, after={"correct_answer": body.correct_answer})); db.commit()
     session = find_session(db, code); await broadcast_state(db, session); return session_snapshot(db, session)
@@ -1598,6 +1704,8 @@ async def change_correct_answer(code: str, question_id: str, body: CorrectAnswer
 async def review_submission(code: str, submission_id: str, body: ReviewBody, account: Account = Depends(require_admin), db: Session = Depends(get_db)):
     session = find_owned_session(db, code, account); submission = db.get(Submission, submission_id)
     if not submission or submission.session_id != session.id: raise HTTPException(404, "Ответ не найден")
+    if not content_mode_policy(session.event.content_mode).scores_answers:
+        raise HTTPException(400, "Ответы опроса не оцениваются")
     submission.is_correct = body.is_correct; submission.validation_status = "manual"; session.state_version += 1
     db.add(AuditLog(session_id=session.id, actor_account_id=account.id, target_account_id=account.id, action="submission.reviewed", after={"submission_id": submission.id, "is_correct": body.is_correct})); db.commit()
     session = find_session(db, code); await broadcast_state(db, session); return session_snapshot(db, session)
@@ -1618,8 +1726,9 @@ async def hero_choice(code: str, body: AnswerBody, db: Session = Depends(get_db)
 @router.get("/sessions/{code}/results")
 def results(code: str, account: Account = Depends(require_admin), db: Session = Depends(get_db)):
     session = find_owned_session(db, code, account)
+    policy = content_mode_policy(session.event.content_mode)
     answers = db.scalars(select(Submission).options(selectinload(Submission.participant), selectinload(Submission.team), selectinload(Submission.question)).where(Submission.session_id == session.id).order_by(Submission.submitted_at)).all()
-    return {"leaderboard": leaderboard(db, session), "submissions": [{"id": s.id, "question": s.question.text, "name": s.participant.full_name if s.participant else s.team.name if s.team else "—", "answer": s.answer_payload, "is_correct": s.is_correct, "elapsed_ms": s.elapsed_ms, "validation_status": s.validation_status} for s in answers]}
+    return {"leaderboard": leaderboard(db, session) if policy.scores_answers else [], "submissions": [{"id": s.id, "question": s.question.text, "name": s.participant.full_name if s.participant else s.team.name if s.team else "—", "answer": s.answer_payload, "is_correct": s.is_correct if policy.scores_answers else None, "elapsed_ms": s.elapsed_ms, "validation_status": s.validation_status} for s in answers]}
 
 
 ALLOWED_MEDIA = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "audio/mpeg": ".mp3", "audio/mp4": ".m4a", "audio/ogg": ".ogg"}

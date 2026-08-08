@@ -13,7 +13,7 @@ const snapshot: Snapshot = {
     current_question_index: 0, question_count: 20, deadline_at: '2026-08-02T12:00:30Z', answered_count: 2, answer_target_count: 3,
   },
   event: {
-    id: 'event-1', title: 'Marvel Quiz Battle', event_format: 'battle', topic: 'Marvel', hero_name: '',
+    id: 'event-1', title: 'Marvel Quiz Battle', event_format: 'battle', content_mode: 'quiz', topic: 'Marvel', hero_name: '',
     game_mode: 'individual', host_mode: 'auto', auto_advance_seconds: 5, tv_display_mode: 'insights', tv_chart_style: 'both', theme: DEFAULT_BRANDING,
   },
   question: {

@@ -1,12 +1,13 @@
 import { createContext, useContext, useEffect, useMemo, useState, type AnchorHTMLAttributes, type PropsWithChildren } from 'react'
+import { readNavigationLocation } from './navigationState'
 
 type LocationValue = { pathname: string; search: string; navigate: (to: string, replace?: boolean) => void }
 const RouterContext = createContext<LocationValue | null>(null)
 
 export function BrowserRouter({ children }: PropsWithChildren) {
-  const [current, setCurrent] = useState(() => ({ pathname: window.location.pathname, search: window.location.search }))
-  useEffect(() => { const update = () => setCurrent({ pathname: location.pathname, search: location.search }); addEventListener('popstate', update); return () => removeEventListener('popstate', update) }, [])
-  const navigate = (to: string, replace = false) => { replace ? history.replaceState({}, '', to) : history.pushState({}, '', to); setCurrent({ pathname: location.pathname, search: location.search }); scrollTo(0, 0) }
+  const [current, setCurrent] = useState(() => readNavigationLocation())
+  useEffect(() => { const update = () => setCurrent(readNavigationLocation(true)); update(); addEventListener('popstate', update); return () => removeEventListener('popstate', update) }, [])
+  const navigate = (to: string, replace = false) => { replace ? history.replaceState({}, '', to) : history.pushState({}, '', to); setCurrent(readNavigationLocation(true)); scrollTo(0, 0) }
   return <RouterContext.Provider value={{ ...current, navigate }}>{children}</RouterContext.Provider>
 }
 

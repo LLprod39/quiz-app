@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildPrompt, parseRunnerResult, sniffAudio, uploadAllowed, validate } from './bridge-server.mjs'
+import { buildPrompt, parseRunnerResult, pcmToWav, sniffAudio, uploadAllowed, validate } from './bridge-server.mjs'
 
 const settings = {
   preset: 'classic-host', pace: 50, energy: 70, pitch: 50,
@@ -49,4 +49,15 @@ test('validates ranges, effects, voices and audio magic bytes', () => {
 
 test('accepts a PowerShell UTF-8 BOM in the runner result', () => {
   assert.deepEqual(parseRunnerResult('\uFEFF{"status":"downloaded"}'), { status: 'downloaded' })
+})
+
+test('wraps Gemini raw PCM in a valid 24 kHz mono WAV file', () => {
+  const pcm = Buffer.from([0, 0, 1, 0])
+  const wav = pcmToWav(pcm)
+  assert.deepEqual(sniffAudio(wav), { mime: 'audio/wav', extension: '.wav' })
+  assert.equal(wav.readUInt16LE(22), 1)
+  assert.equal(wav.readUInt32LE(24), 24_000)
+  assert.equal(wav.readUInt16LE(34), 16)
+  assert.equal(wav.readUInt32LE(40), pcm.length)
+  assert.deepEqual(wav.subarray(44), pcm)
 })

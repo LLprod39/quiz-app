@@ -94,7 +94,10 @@ function Invoke-RefAction {
 }
 
 function Invoke-PointerRefClick {
-  param([Parameter(Mandatory = $true)][string]$Ref)
+  param(
+    [Parameter(Mandatory = $true)][string]$Ref,
+    [ValidateRange(0.1, 0.9)][double]$VerticalRatio = 0.5
+  )
 
   $selector = "@$Ref"
   $box = Invoke-AgentBrowser -CommandArgs @('get', 'box', $selector)
@@ -102,7 +105,7 @@ function Invoke-PointerRefClick {
     throw "page_changed: bounding box for $selector was not available"
   }
   $centerX = [Math]::Round([double]$box.x + ([double]$box.width / 2))
-  $centerY = [Math]::Round([double]$box.y + ([double]$box.height / 2))
+  $centerY = [Math]::Round([double]$box.y + ([double]$box.height * $VerticalRatio))
   Invoke-AgentBrowser -CommandArgs @('mouse', 'move', [string]$centerX, [string]$centerY) | Out-Null
   Invoke-AgentBrowser -CommandArgs @('mouse', 'down', 'left') | Out-Null
   Start-Sleep -Milliseconds 120
@@ -336,7 +339,9 @@ try {
       $snapshot = Get-Snapshot
       $voiceRef = Find-Ref -Snapshot $snapshot -Role 'button' -Name $voiceId
       if (-not $voiceRef) { throw "voice_unavailable: voice $voiceId is absent" }
-      Invoke-AgentBrowser -CommandArgs @('find', 'role', 'button', 'click', '--name', $voiceId, '--exact') | Out-Null
+      # AI Studio currently ignores both a semantic click and a pointer click
+      # over the trait chips. Click the upper voice-name row to select it.
+      Invoke-PointerRefClick -Ref $voiceRef -VerticalRatio 0.25
       try {
         $voiceReady = Wait-ForRef -Role 'button' -Name "$voiceId (Current)" -Attempts 30
         break

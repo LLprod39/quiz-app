@@ -14,6 +14,7 @@ const port = Number(process.env.QUIZ_SPEECH_BRIDGE_PORT || 8766)
 const allowedVoices = new Set(['Kore', 'Aoede', 'Leda', 'Zephyr', 'Puck', 'Charon', 'Fenrir', 'Orus'])
 const allowedEffects = new Set(['quiz-host', 'warm-smile', 'suspense', 'dramatic-pause', 'emphasize', 'mysterious', 'final-question'])
 const explicitOrigins = new Set((process.env.QUIZ_APP_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean))
+const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim()
 let busy = false
 let currentStage = 'idle'
 const downloadsRoot = join(process.env.LOCALAPPDATA || join(root, 'state'), 'QuizApp', 'speech-downloads')
@@ -168,6 +169,55 @@ function sniffAudio(buffer) {
   return null
 }
 
+function pcmToWav(pcm, channels = 1, sampleRate = 24_000, bitsPerSample = 16) {
+  if (!Buffer.isBuffer(pcm) || !pcm.length) throw new Error('Gemini API returned empty PCM audio')
+  const blockAlign = channels * (bitsPerSample / 8)
+  const byteRate = sampleRate * blockAlign
+  const wav = Buffer.allocUnsafe(44 + pcm.length)
+  wav.write('RIFF', 0)
+  wav.writeUInt32LE(36 + pcm.length, 4)
+  wav.write('WAVE', 8)
+  wav.write('fmt ', 12)
+  wav.writeUInt32LE(16, 16)
+  wav.writeUInt16LE(1, 20)
+  wav.writeUInt16LE(channels, 22)
+  wav.writeUInt32LE(sampleRate, 24)
+  wav.writeUInt32LE(byteRate, 28)
+  wav.writeUInt16LE(blockAlign, 32)
+  wav.writeUInt16LE(bitsPerSample, 34)
+  wav.write('data', 36)
+  wav.writeUInt32LE(pcm.length, 40)
+  pcm.copy(wav, 44)
+  return wav
+}
+
+async function generateWithGeminiApi(payload, destination) {
+  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': geminiApiKey,
+    },
+    body: JSON.stringify({
+      model: 'gemini-3.1-flash-tts-preview',
+      input: payload.prompt,
+      response_format: { type: 'audio' },
+      generation_config: { speech_config: [{ voice: payload.voice_id }] },
+    }),
+    signal: AbortSignal.timeout(180_000),
+  })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const detail = body?.error?.message || body?.message || `HTTP ${response.status}`
+    throw new Error(`gemini_api_error: ${detail}`)
+  }
+  const encoded = body?.output_audio?.data
+  if (typeof encoded !== 'string' || !encoded) throw new Error('gemini_api_error: response did not contain audio')
+  const wav = pcmToWav(Buffer.from(encoded, 'base64'))
+  await writeFile(destination, wav)
+  return destination
+}
+
 async function generateOne(payload) {
   const taskId = randomUUID()
   const taskDir = join(downloadsRoot, taskId)
@@ -178,13 +228,19 @@ async function generateOne(payload) {
   let downloaded = false
   let uploaded = false
   try {
-    await writeFile(inputPath, JSON.stringify({ ...payload, task_id: taskId, task_dir: taskDir }), 'utf8')
-    currentStage = 'browser_automation'
-    await runPowerShell(inputPath, outputPath)
+    let audioPath
+    if (geminiApiKey) {
+      currentStage = 'gemini_api'
+      audioPath = await generateWithGeminiApi(payload, join(taskDir, 'speech-download.wav'))
+    } else {
+      await writeFile(inputPath, JSON.stringify({ ...payload, task_id: taskId, task_dir: taskDir }), 'utf8')
+      currentStage = 'browser_automation'
+      await runPowerShell(inputPath, outputPath)
+      const result = parseRunnerResult(await readFile(outputPath, 'utf8'))
+      if (!result.downloaded_file) throw new Error(result.detail || 'Runner не вернул аудиофайл')
+      audioPath = resolve(result.downloaded_file)
+    }
     currentStage = 'validating_download'
-    const result = parseRunnerResult(await readFile(outputPath, 'utf8'))
-    if (!result.downloaded_file) throw new Error(result.detail || 'Runner не вернул аудиофайл')
-    const audioPath = resolve(result.downloaded_file)
     const inside = relative(resolve(taskDir), audioPath)
     if (!inside || inside.startsWith('..') || isAbsolute(inside)) throw new Error('Runner вернул файл вне каталога задачи')
     const audio = await readFile(audioPath)
@@ -223,7 +279,9 @@ const server = createServer(async (request, response) => {
   if (request.method === 'GET' && request.url === '/health') {
     const installed = await commandExists('agent-browser')
     return json(response, 200, {
-      status: installed ? 'ready' : 'setup_required',
+      status: geminiApiKey || installed ? 'ready' : 'setup_required',
+      provider: geminiApiKey ? 'gemini_api' : 'ai_studio_browser',
+      gemini_api: geminiApiKey ? 'configured' : 'missing_key',
       agent_browser: installed ? 'installed' : 'missing',
       chrome: await chromeStatus(),
       ai_studio: 'unknown',
@@ -233,7 +291,7 @@ const server = createServer(async (request, response) => {
   }
   if (request.method !== 'POST' || request.url !== '/generate-one') return json(response, 404, { error: 'not_found' }, origin)
   if (busy) return json(response, 409, { error: 'generation_busy', detail: 'Уже озвучивается другой вопрос' }, origin)
-  if (!await commandExists('agent-browser')) return json(response, 503, {
+  if (!geminiApiKey && !await commandExists('agent-browser')) return json(response, 503, {
     error: 'agent_browser_missing',
     detail: 'Установите agent-browser: npm i -g agent-browser, затем agent-browser install',
   }, origin)
@@ -250,7 +308,7 @@ const server = createServer(async (request, response) => {
   }
 })
 
-export { buildPrompt, buildScene, nativePace, nativeStyle, originAllowed, parseRunnerResult, server, sniffAudio, uploadAllowed, validate }
+export { buildPrompt, buildScene, nativePace, nativeStyle, originAllowed, parseRunnerResult, pcmToWav, server, sniffAudio, uploadAllowed, validate }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   server.listen(port, host, () => process.stdout.write(`Quiz speech bridge: http://${host}:${port}\n`))

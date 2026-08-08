@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
@@ -5,9 +6,10 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field, HttpUrl, model_validator
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
@@ -15,11 +17,22 @@ from .db import get_db
 from .game import MAX_QUESTIONS, answer_target_count, auto_transition_deadline, bump_version, check_answer, generate_join_code, iso_utc, leaderboard, ordered_questions, recalculate_submissions, session_snapshot, utcnow
 from .models import (
     AnswerOption, AuditLog, DeviceTransfer, Event, GameSession, Participant, Question, Questionnaire,
-    QuestionnaireItem, QuestionnaireResponse, QuizPackTemplate, Round, Submission, Team, uid,
+    QuestionnaireItem, QuestionnaireResponse, QuestionSpeechVersion, QuizPackTemplate, Round, Submission, Team, uid,
 )
 from .realtime import hub
 from .quiz_packs import PACKS_BY_SLUG, QUIZ_PACKS, public_pack
-from .security import create_admin_token, new_device_token, require_admin, token_hash
+from .security import (
+    create_admin_token, create_speech_upload_ticket, new_device_token, require_admin,
+    token_hash, verify_speech_upload_ticket,
+)
+from .speech_mvp import (
+    BRIDGE_URL, DEFAULT_SPEECH_SETTINGS, PRESETS, PROMPT_VERSION, VOICE_CATALOG,
+    SpeechDefaultsBody, SpeechGenerationBody, SpeechStyleSettings, active_speech_version,
+    QuestionSpeechSettingsBody,
+    build_speech_prompt, normalized_event_speech_settings, normalized_question_text,
+    serialize_question_speech, serialize_speech_version, sniff_audio, speech_source_hash,
+    speech_settings_context_hash, voice_presentation,
+)
 
 
 router = APIRouter(prefix="/api")
@@ -105,6 +118,7 @@ class EventBody(BaseModel):
     allow_late_join: bool = True
     hero_photo_url: str | None = None
     theme: ThemeBody = Field(default_factory=ThemeBody)
+    speech_settings: SpeechDefaultsBody = Field(default_factory=SpeechDefaultsBody)
 
     @model_validator(mode="after")
     def validate_format_details(self):
@@ -332,6 +346,7 @@ class TransferClaimBody(BaseModel):
 def event_query():
     return select(Event).options(
         selectinload(Event.rounds).selectinload(Round.questions).selectinload(Question.options),
+        selectinload(Event.rounds).selectinload(Round.questions).selectinload(Question.speech_versions),
         selectinload(Event.questionnaire).selectinload(Questionnaire.items).selectinload(QuestionnaireItem.response),
         selectinload(Event.sessions).selectinload(GameSession.participants),
     )
@@ -340,13 +355,17 @@ def event_query():
 def session_query():
     return select(GameSession).options(
         selectinload(GameSession.event).selectinload(Event.rounds).selectinload(Round.questions).selectinload(Question.options),
+        selectinload(GameSession.event).selectinload(Event.rounds).selectinload(Round.questions).selectinload(Question.speech_versions),
         selectinload(GameSession.current_question).selectinload(Question.options),
-        selectinload(GameSession.current_question).selectinload(Question.round),
+        selectinload(GameSession.current_question).selectinload(Question.speech_versions),
+        selectinload(GameSession.current_question).selectinload(Question.round).selectinload(Round.event),
         selectinload(GameSession.participants), selectinload(GameSession.teams),
     )
 
 
 def serialize_question(question: Question) -> dict:
+    speech = serialize_question_speech(question)
+    active = speech["active"]
     return {
         "id": question.id, "round_id": question.round_id, "round_title": question.round.title,
         "type": question.type, "text": question.text, "time_limit_seconds": question.time_limit_seconds,
@@ -354,6 +373,10 @@ def serialize_question(question: Question) -> dict:
         "numeric_tolerance": question.numeric_tolerance, "shuffle_options": question.shuffle_options,
         "explanation": question.explanation, "media_url": question.media_url, "media_type": question.media_type,
         "audio_replays": question.audio_replays, "sort_order": question.sort_order,
+        "speech": speech,
+        "speech_settings_override": question.speech_settings_override,
+        "speech_audio_url": active["file_url"] if active else None,
+        "speech_audio_type": active["mime_type"] if active else None,
         "options": [{"id": o.id, "text": o.text, "is_correct": o.is_correct, "sort_order": o.sort_order} for o in question.options],
     }
 
@@ -382,6 +405,7 @@ def serialize_event(event: Event) -> dict:
         "status": event.status, "is_selected": event.is_selected, "game_mode": event.game_mode,
         "host_mode": event.host_mode, "auto_advance_seconds": event.auto_advance_seconds,
         "tv_display_mode": event.tv_display_mode, "tv_chart_style": event.tv_chart_style, "theme": normalize_theme(event.theme),
+        "speech_settings": normalized_event_speech_settings(event.speech_settings),
         "hero_photo_url": event.hero_photo_url, "allow_late_join": event.allow_late_join,
         "created_at": iso_utc(event.created_at), "updated_at": iso_utc(event.updated_at),
         "question_count": len(questions), "active_session_code": active.join_code if active else None,
@@ -830,13 +854,13 @@ def create_question(event_id: str, body: QuestionBody, _: str = Depends(require_
         selected = next((o.get("id") for o in body.options if o.get("is_correct")), None)
         question.correct_answer = selected
     db.commit()
-    question = db.scalar(select(Question).options(selectinload(Question.options), selectinload(Question.round)).where(Question.id == question.id))
+    question = db.scalar(select(Question).options(selectinload(Question.options), selectinload(Question.round), selectinload(Question.speech_versions)).where(Question.id == question.id))
     return serialize_question(question)
 
 
 @router.put("/questions/{question_id}")
 def update_question(question_id: str, body: QuestionBody, _: str = Depends(require_admin), db: Session = Depends(get_db)):
-    question = db.scalar(select(Question).options(selectinload(Question.options), selectinload(Question.round)).where(Question.id == question_id))
+    question = db.scalar(select(Question).options(selectinload(Question.options), selectinload(Question.round), selectinload(Question.speech_versions)).where(Question.id == question_id))
     if not question: raise HTTPException(404, "Вопрос не найден")
     event = db.get(Event, question.round.event_id)
     if event and event.event_format == "battle" and body.type == "hero_choice":
@@ -848,8 +872,324 @@ def update_question(question_id: str, body: QuestionBody, _: str = Depends(requi
         db.add(AnswerOption(id=option_data.get("id") or uid(), question_id=question.id, text=option_data.get("text", ""), is_correct=bool(option_data.get("is_correct")), sort_order=index))
     db.add(AuditLog(action="question.updated", before=before, after=body.model_dump()))
     db.commit()
-    question = db.scalar(select(Question).options(selectinload(Question.options), selectinload(Question.round)).where(Question.id == question_id))
+    question = db.scalar(select(Question).options(selectinload(Question.options), selectinload(Question.round), selectinload(Question.speech_versions)).where(Question.id == question_id))
     return serialize_question(question)
+
+
+def speech_question(db: Session, question_id: str) -> Question:
+    question = db.scalar(
+        select(Question).options(
+            selectinload(Question.round).selectinload(Round.event),
+            selectinload(Question.speech_versions),
+        ).where(Question.id == question_id).execution_options(populate_existing=True)
+    )
+    if not question:
+        raise HTTPException(404, "Вопрос не найден")
+    return question
+
+
+def local_speech_file(file_url: str) -> Path | None:
+    prefix = "/media/"
+    if not file_url.startswith(prefix):
+        return None
+    root = settings.media_path.resolve()
+    candidate = (root / file_url[len(prefix):]).resolve()
+    try:
+        candidate.relative_to(root / "speech")
+    except ValueError:
+        return None
+    return candidate
+
+
+def remove_speech_file(file_url: str) -> None:
+    path = local_speech_file(file_url)
+    if path and path.is_file():
+        path.unlink()
+
+
+@router.get("/speech/mvp/config")
+def speech_mvp_config(_: str = Depends(require_admin)):
+    return {
+        "bridge_url": BRIDGE_URL,
+        "prompt_version": PROMPT_VERSION,
+        "voices": VOICE_CATALOG,
+        "presets": PRESETS,
+        "defaults": DEFAULT_SPEECH_SETTINGS,
+    }
+
+
+@router.put("/events/{event_id}/speech-settings")
+def update_event_speech_settings(
+    event_id: str,
+    body: SpeechDefaultsBody,
+    _: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    event = db.get(Event, event_id)
+    if not event:
+        raise HTTPException(404, "Мероприятие не найдено")
+    before = normalized_event_speech_settings(event.speech_settings)
+    event.speech_settings = body.model_dump()
+    db.add(AuditLog(action="event.speech_settings.updated", before=before, after=event.speech_settings))
+    db.commit()
+    return event.speech_settings
+
+
+@router.get("/questions/{question_id}/speech")
+def question_speech(question_id: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    question = speech_question(db, question_id)
+    return {
+        **serialize_question_speech(question),
+        "question_id": question.id,
+        "current_text": normalized_question_text(question.text),
+    }
+
+
+@router.put("/questions/{question_id}/speech-settings")
+def update_question_speech_settings(
+    question_id: str,
+    body: QuestionSpeechSettingsBody,
+    _: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    question = speech_question(db, question_id)
+    before = question.speech_settings_override
+    question.speech_settings_override = None if body.use_event_defaults else {
+        "voice_id": body.voice_id,
+        "settings": body.settings.model_dump(),
+    }
+    db.add(AuditLog(
+        action="question.speech_settings.updated",
+        before={"question_id": question.id, "override": before},
+        after={"question_id": question.id, "override": question.speech_settings_override},
+    ))
+    db.commit()
+    return serialize_question_speech(speech_question(db, question.id))
+
+
+@router.post("/questions/{question_id}/speech/automation-ticket")
+def create_question_speech_ticket(
+    question_id: str,
+    body: SpeechGenerationBody,
+    _: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    question = speech_question(db, question_id)
+    text = normalized_question_text(question.text)
+    if not text:
+        raise HTTPException(400, "Текст вопроса пуст")
+    try:
+        build_speech_prompt(text, body.settings)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    source_hash = speech_source_hash(text, body.voice_id, body.settings)
+    active = active_speech_version(question)
+    if active and active.source_hash == source_hash and not body.force:
+        return {
+            "status": "already_ready",
+            "question_id": question.id,
+            "active": serialize_speech_version(active),
+        }
+    style_payload = body.settings.model_dump()
+    effective_settings = question.speech_settings_override or question.round.event.speech_settings
+    ticket, _ = create_speech_upload_ticket(
+        question_id=question.id,
+        source_hash=source_hash,
+        voice_id=body.voice_id,
+        voice_presentation=voice_presentation(body.voice_id),
+        settings_payload=style_payload,
+        settings_context_hash=speech_settings_context_hash(effective_settings),
+        prompt_version=PROMPT_VERSION,
+    )
+    return {
+        "status": "ready",
+        "question_id": question.id,
+        "text": text,
+        "source_hash": source_hash,
+        "voice_id": body.voice_id,
+        "voice_presentation": voice_presentation(body.voice_id),
+        "settings": style_payload,
+        "ticket": ticket,
+        "upload_path": f"/api/questions/{question.id}/speech/upload",
+        "expires_in_seconds": 600,
+    }
+
+
+@router.post("/questions/{question_id}/speech/upload")
+async def upload_question_speech(
+    question_id: str,
+    file: UploadFile = File(...),
+    x_speech_automation_ticket: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    payload = verify_speech_upload_ticket(x_speech_automation_ticket or "")
+    if not payload or payload["question_id"] != question_id:
+        raise HTTPException(401, "Билет загрузки недействителен или истёк")
+    question = speech_question(db, question_id)
+    try:
+        style = SpeechStyleSettings(**payload["settings"])
+        current_hash = speech_source_hash(question.text, payload["voice_id"], style)
+    except (KeyError, ValueError) as error:
+        raise HTTPException(400, "Настройки озвучки в билете повреждены") from error
+    if payload["source_hash"] != current_hash:
+        raise HTTPException(409, "Текст или настройки изменились. Запустите озвучку заново")
+    effective_settings = question.speech_settings_override or question.round.event.speech_settings
+    if payload["settings_context_hash"] != speech_settings_context_hash(effective_settings):
+        raise HTTPException(409, "Настройки вопроса изменились во время генерации. Запустите озвучку заново")
+    nonce_hash = token_hash(payload["nonce"])
+    if db.scalar(select(QuestionSpeechVersion.id).where(QuestionSpeechVersion.automation_nonce_hash == nonce_hash)):
+        raise HTTPException(409, "Этот билет уже использован")
+
+    limit = min(settings.max_upload_mb, 25) * 1024 * 1024
+    content = await file.read(limit + 1)
+    if not content or len(content) > limit:
+        raise HTTPException(413, f"Файл озвучки должен быть не больше {limit // 1024 // 1024} МБ")
+    detected = sniff_audio(content)
+    if not detected:
+        raise HTTPException(415, "Ожидается WAV, MP3, M4A или OGG файл")
+    mime_type, extension = detected
+
+    speech_dir = settings.media_path / "speech" / question.round.event_id
+    speech_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{question.id}-{uuid4().hex}{extension}"
+    destination = speech_dir / filename
+    temporary = destination.with_suffix(destination.suffix + ".part")
+    temporary.write_bytes(content)
+    temporary.replace(destination)
+    file_url = f"/media/speech/{question.round.event_id}/{filename}"
+
+    old_candidate = next((item for item in question.speech_versions if item.status == "candidate"), None)
+    active = active_speech_version(question)
+    version_number = max((item.version_number for item in question.speech_versions), default=0) + 1
+    version = QuestionSpeechVersion(
+        question_id=question.id,
+        version_number=version_number,
+        status="candidate" if active else "active",
+        file_url=file_url,
+        mime_type=mime_type,
+        source_text=normalized_question_text(question.text),
+        source_hash=current_hash,
+        voice_id=payload["voice_id"],
+        voice_presentation=payload["voice_presentation"],
+        settings_json=style.model_dump(),
+        prompt_version=int(payload["prompt_version"]),
+        source="ai_studio_browser_mvp",
+        automation_nonce_hash=nonce_hash,
+        activated_at=utcnow() if not active else None,
+    )
+    if old_candidate:
+        old_candidate.status = "discarded"
+    db.add(version)
+    db.add(AuditLog(action="question.speech.uploaded", after={
+        "question_id": question.id,
+        "version_number": version_number,
+        "status": version.status,
+        "voice_id": version.voice_id,
+    }))
+    try:
+        db.commit()
+    except IntegrityError as error:
+        db.rollback()
+        destination.unlink(missing_ok=True)
+        raise HTTPException(409, "Билет уже использован или версия конфликтует") from error
+    if old_candidate:
+        remove_speech_file(old_candidate.file_url)
+    question = speech_question(db, question.id)
+    return {"status": "uploaded", **serialize_question_speech(question)}
+
+
+@router.post("/questions/{question_id}/speech/versions/{version_id}/activate")
+def activate_question_speech(
+    question_id: str,
+    version_id: str,
+    _: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    question = speech_question(db, question_id)
+    target = next((item for item in question.speech_versions if item.id == version_id), None)
+    if not target or target.status not in {"candidate", "previous", "active"}:
+        raise HTTPException(404, "Версия озвучки не найдена")
+    if target.status == "active":
+        return serialize_question_speech(question)
+    current = active_speech_version(question)
+    removed: list[str] = []
+    for version in question.speech_versions:
+        if version.status == "previous" and version.id != target.id:
+            version.status = "discarded"
+            removed.append(version.file_url)
+    if current:
+        current.status = "previous"
+    target.status = "active"
+    target.activated_at = utcnow()
+    db.add(AuditLog(action="question.speech.activated", after={"question_id": question.id, "version_id": target.id}))
+    db.commit()
+    for file_url in removed:
+        remove_speech_file(file_url)
+    return serialize_question_speech(speech_question(db, question.id))
+
+
+def restore_speech_version(db: Session, question: Question, previous: QuestionSpeechVersion) -> dict:
+    removed: list[str] = []
+    for version in question.speech_versions:
+        if version.status == "candidate":
+            version.status = "discarded"
+            removed.append(version.file_url)
+    current = active_speech_version(question)
+    if current:
+        current.status = "candidate"
+    previous.status = "active"
+    previous.activated_at = utcnow()
+    db.add(AuditLog(action="question.speech.restored", after={"question_id": question.id, "version_id": previous.id}))
+    db.commit()
+    for file_url in removed:
+        remove_speech_file(file_url)
+    return serialize_question_speech(speech_question(db, question.id))
+
+
+@router.post("/questions/{question_id}/speech/versions/{version_id}/restore")
+def restore_question_speech_version(
+    question_id: str,
+    version_id: str,
+    _: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    question = speech_question(db, question_id)
+    previous = next((item for item in question.speech_versions if item.id == version_id and item.status == "previous"), None)
+    if not previous:
+        raise HTTPException(409, "Выбранная версия не является предыдущей")
+    return restore_speech_version(db, question, previous)
+
+
+@router.post("/questions/{question_id}/speech/restore")
+def restore_question_speech(question_id: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
+    question = speech_question(db, question_id)
+    previous = next((item for item in question.speech_versions if item.status == "previous"), None)
+    if not previous:
+        raise HTTPException(409, "Предыдущей версии нет")
+    return restore_speech_version(db, question, previous)
+
+
+@router.delete("/questions/{question_id}/speech/versions/{version_id}")
+def delete_question_speech_version(
+    question_id: str,
+    version_id: str,
+    confirm_active: bool = Query(default=False),
+    _: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    question = speech_question(db, question_id)
+    version = next((item for item in question.speech_versions if item.id == version_id and item.status != "discarded"), None)
+    if not version:
+        raise HTTPException(404, "Версия озвучки не найдена")
+    if version.status == "active" and not confirm_active:
+        raise HTTPException(409, "Подтвердите удаление активной озвучки")
+    file_url = version.file_url
+    deleted_status = version.status
+    version.status = "discarded"
+    db.add(AuditLog(action="question.speech.deleted", before={"question_id": question.id, "version_id": version.id, "status": deleted_status}))
+    db.commit()
+    remove_speech_file(file_url)
+    return {"status": "deleted", **serialize_question_speech(speech_question(db, question.id))}
 
 
 @router.post("/events/{event_id}/question-presets")
@@ -902,9 +1242,13 @@ def add_question_presets(event_id: str, _: str = Depends(require_admin), db: Ses
 
 @router.delete("/questions/{question_id}")
 def delete_question(question_id: str, _: str = Depends(require_admin), db: Session = Depends(get_db)):
-    question = db.get(Question, question_id)
+    question = speech_question(db, question_id)
     if not question: raise HTTPException(404, "Вопрос не найден")
-    db.delete(question); db.commit(); return {"status": "deleted"}
+    speech_files = [version.file_url for version in question.speech_versions]
+    db.delete(question); db.commit()
+    for file_url in speech_files:
+        remove_speech_file(file_url)
+    return {"status": "deleted"}
 
 
 @router.post("/events/{event_id}/sessions")

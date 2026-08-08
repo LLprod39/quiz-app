@@ -30,6 +30,7 @@ class Event(Base):
     auto_advance_seconds: Mapped[int] = mapped_column(Integer, default=5, server_default="5", nullable=False)
     tv_display_mode: Mapped[str] = mapped_column(String(16), default="classic", server_default="classic", nullable=False)
     tv_chart_style: Mapped[str] = mapped_column(String(16), default="both", server_default="both", nullable=False)
+    speech_settings: Mapped[dict] = mapped_column(JSON, default=dict, server_default="{}", nullable=False)
     theme: Mapped[dict] = mapped_column(JSON, default=lambda: {"accent": "#ff6b6b", "mode": "dark", "decor": "confetti"})
     hero_photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     allow_late_join: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -105,10 +106,16 @@ class Question(Base):
     media_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     media_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     audio_replays: Mapped[int] = mapped_column(Integer, default=1)
+    speech_settings_override: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     status: Mapped[str] = mapped_column(String(24), default="ready")
     round: Mapped[Round] = relationship(back_populates="questions")
     options: Mapped[list["AnswerOption"]] = relationship(back_populates="question", cascade="all, delete-orphan", order_by="AnswerOption.sort_order")
+    speech_versions: Mapped[list["QuestionSpeechVersion"]] = relationship(
+        back_populates="question",
+        cascade="all, delete-orphan",
+        order_by="QuestionSpeechVersion.version_number",
+    )
 
 
 class AnswerOption(Base):
@@ -119,6 +126,31 @@ class AnswerOption(Base):
     is_correct: Mapped[bool] = mapped_column(Boolean, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     question: Mapped[Question] = relationship(back_populates="options")
+
+
+class QuestionSpeechVersion(Base):
+    __tablename__ = "question_speech_versions"
+    __table_args__ = (
+        UniqueConstraint("question_id", "version_number", name="uq_question_speech_version"),
+        UniqueConstraint("automation_nonce_hash", name="uq_question_speech_automation_nonce"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
+    question_id: Mapped[str] = mapped_column(ForeignKey("questions.id"), index=True)
+    version_number: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(16), default="candidate", index=True)
+    file_url: Mapped[str] = mapped_column(String(500))
+    mime_type: Mapped[str] = mapped_column(String(40))
+    source_text: Mapped[str] = mapped_column(Text)
+    source_hash: Mapped[str] = mapped_column(String(64), index=True)
+    voice_id: Mapped[str] = mapped_column(String(80))
+    voice_presentation: Mapped[str] = mapped_column(String(16))
+    settings_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    prompt_version: Mapped[int] = mapped_column(Integer, default=1)
+    source: Mapped[str] = mapped_column(String(32), default="ai_studio_browser_mvp")
+    automation_nonce_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    question: Mapped[Question] = relationship(back_populates="speech_versions")
 
 
 class GameSession(Base):

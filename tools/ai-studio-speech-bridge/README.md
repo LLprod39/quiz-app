@@ -1,8 +1,8 @@
-# Google AI Studio speech bridge (MVP)
+# Quiz speech bridge (MVP)
 
-Локальный helper принимает только одну задачу, слушает `127.0.0.1:8766` и передаёт готовое аудио в Quiz API по одноразовому билету. Предпочтительный провайдер — официальный Gemini TTS API; автоматизация AI Studio в Chrome оставлена как запасной MVP-режим.
+Локальный helper принимает только одну задачу, слушает `127.0.0.1:8766` и передаёт готовое аудио в Quiz API по одноразовому билету. На Windows по умолчанию используется установленный русский системный голос: без API key, Google, сети и billing.
 
-## Первичная установка
+## Необязательный браузерный режим
 
 ```powershell
 npm i -g agent-browser
@@ -15,21 +15,21 @@ Google email, пароль, API key, 2FA и CAPTCHA робот не вводит
 
 ## Обычный запуск MVP
 
-Добавьте API key в корневой `.env` (файл исключён из Git):
-
-```dotenv
-GEMINI_API_KEY=ваш_ключ_из_Google_AI_Studio
-```
-
-Из корня проекта:
+API key не требуется. Из корня проекта:
 
 ```powershell
 .\start-quiz-mvp.ps1
 ```
 
-Launcher поднимает bridge в скрытом окне, запускает LAN Compose и открывает `/admin`. При наличии `GEMINI_API_KEY` bridge вызывает `gemini-3.1-flash-tts-preview`, оборачивает возвращённый 24 kHz mono PCM в WAV и загружает его в квиз. Chrome не нужен.
+Если позднее понадобится Gemini TTS, добавьте API key в корневой `.env` (файл исключён из Git):
 
-Без ключа bridge использует старый browser runner: открывает Speech Composer, вставляет вопрос, выбирает голос и настройки и нажимает `Run`. Этот режим зависит от защитных механизмов Google AI Studio и может быть отклонён HTTP 403.
+```dotenv
+GEMINI_API_KEY=ваш_ключ_из_Google_AI_Studio
+```
+
+Launcher поднимает bridge в скрытом окне, запускает LAN Compose и открывает `/admin`. Без ключа bridge использует первый установленный русский системный голос (на этой машине — `Microsoft Irina Desktop`), применяет темп, громкость и паузу, создаёт WAV и загружает его в квиз. Chrome не нужен.
+
+При наличии `GEMINI_API_KEY` bridge предпочитает `gemini-3.1-flash-tts-preview`. Старый browser runner доступен только если локальный Windows TTS явно отключён через `QUIZ_SPEECH_DISABLE_WINDOWS_TTS=1`; он может быть отклонён Google с HTTP 403.
 
 ## Диагностика
 
@@ -37,7 +37,7 @@ Launcher поднимает bridge в скрытом окне, запускае�
 Invoke-RestMethod http://127.0.0.1:8766/health
 ```
 
-`provider: gemini_api` и `gemini_api: configured` означают, что используется официальный API. `provider: ai_studio_browser` означает запасной браузерный режим. Поле `stage` показывает текущий этап: `gemini_api`, `browser_automation`, проверка аудио или upload. `login_required`, dialog ключа, HTTP 403 или Google security screen требуют перехода на API key; автоматического обхода защиты нет.
+`provider: windows_tts` означает полностью локальную озвучку без ключа. `provider: gemini_api` означает официальный API, а `provider: ai_studio_browser` — запасной браузерный режим. Поле `stage` показывает текущий этап: `windows_tts`, `gemini_api`, `browser_automation`, проверка аудио или upload.
 
 Актуальные доступные имена элементов и признаки готового/ошибочного результата записаны в [AI_STUDIO_UI_CONTRACT.md](AI_STUDIO_UI_CONTRACT.md). Runner обязан останавливаться, если текущий snapshot им не соответствует.
 

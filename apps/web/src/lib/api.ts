@@ -93,11 +93,14 @@ export interface SpeechAutomationTicket {
 
 export interface LocalSpeechBridgeHealth {
   status: 'ready' | 'setup_required'
+  provider?: 'windows_tts' | 'gemini_api' | 'ai_studio_browser'
+  windows_tts?: 'enabled' | 'disabled'
+  gemini_api?: 'configured' | 'missing_key'
   agent_browser: 'installed' | 'missing'
   chrome: 'connected' | 'unavailable' | 'stopped'
   ai_studio: 'authenticated' | 'login_required' | 'unknown'
   busy: boolean
-  stage: 'idle' | 'validating' | 'preparing_task' | 'browser_automation' | 'validating_download' | 'uploading' | 'completed'
+  stage: 'idle' | 'validating' | 'preparing_task' | 'windows_tts' | 'gemini_api' | 'browser_automation' | 'validating_download' | 'uploading' | 'completed'
 }
 
 export async function checkLocalSpeechBridge(bridgeUrl: string): Promise<LocalSpeechBridgeHealth> {

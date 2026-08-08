@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Check, Headphones, LoaderCircle, Play, RotateCcw, Save, Sparkles, Trash2 } from 'lucide-react'
 
-import { api, checkLocalSpeechBridge, runLocalSpeechBridge, type SpeechMvpConfig } from '../lib/api'
+import { api, checkLocalSpeechBridge, runLocalSpeechBridge, type LocalSpeechBridgeHealth, type SpeechMvpConfig } from '../lib/api'
 import type { EventData, Question, QuestionSpeech, SpeechDefaults, SpeechStyleSettings } from '../types'
 import { Badge, Button, Field } from './ui'
 
@@ -32,6 +32,8 @@ const sliderLabels: { key: keyof SpeechStyleSettings; label: string; min: number
 const bridgeStageLabels: Record<string, string> = {
   validating: 'Проверяем задачу и одноразовый билет…',
   preparing_task: 'Готовим отдельную папку для нового аудиофайла…',
+  windows_tts: 'Создаём озвучку локальным русским голосом Windows…',
+  gemini_api: 'Создаём озвучку через официальный Gemini TTS API…',
   browser_automation: 'Chrome открывает AI Studio, вставляет вопрос, создаёт и скачивает озвучку…',
   validating_download: 'Проверяем формат и целостность скачанного аудиофайла…',
   uploading: 'Сохраняем озвучку в выбранный вопрос…',
@@ -59,6 +61,7 @@ export function QuestionSpeechEditor({ event, question, onChanged }: {
   const [busy, setBusy] = useState('')
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
+  const [bridgeProvider, setBridgeProvider] = useState<LocalSpeechBridgeHealth['provider']>()
 
   useEffect(() => {
     let active = true
@@ -66,6 +69,9 @@ export function QuestionSpeechEditor({ event, question, onChanged }: {
       if (!active) return
       setConfig(result)
       if (!event.speech_settings) setValues(result.defaults)
+      void checkLocalSpeechBridge(result.bridge_url).then(health => {
+        if (active) setBridgeProvider(health.provider)
+      }).catch(() => {})
     }).catch(err => active && setError(err instanceof Error ? err.message : 'Не удалось загрузить голоса'))
     return () => { active = false }
   }, [event.id])
@@ -117,9 +123,16 @@ export function QuestionSpeechEditor({ event, question, onChanged }: {
         await refresh()
         return
       }
-      setStatus('Открываем Google AI Studio и создаём один аудиофайл…')
       if (!config) throw new Error('Конфигурация озвучки ещё загружается')
+      const initialHealth = await checkLocalSpeechBridge(config.bridge_url)
+      setBridgeProvider(initialHealth.provider)
+      setStatus(initialHealth.provider === 'windows_tts'
+        ? 'Создаём один аудиофайл локальным русским голосом Windows…'
+        : initialHealth.provider === 'gemini_api'
+          ? 'Создаём один аудиофайл через Gemini TTS API…'
+          : 'Открываем Google AI Studio и создаём один аудиофайл…')
       await runLocalSpeechBridge(config.bridge_url, ticket, health => {
+        setBridgeProvider(health.provider)
         const progress = bridgeStageLabels[health.stage]
         if (progress) setStatus(progress)
       })
@@ -146,7 +159,12 @@ export function QuestionSpeechEditor({ event, question, onChanged }: {
     try {
       if (!config) throw new Error('Конфигурация озвучки ещё загружается')
       const health = await checkLocalSpeechBridge(config.bridge_url)
-      if (health.agent_browser === 'missing') {
+      setBridgeProvider(health.provider)
+      if (health.provider === 'windows_tts') {
+        setStatus(health.busy ? 'Локальная озвучка уже создаётся для другого вопроса.' : 'Локальный русский голос Windows готов. API key и Chrome не нужны.')
+      } else if (health.provider === 'gemini_api') {
+        setStatus(health.busy ? 'Gemini TTS уже озвучивает другой вопрос.' : 'Официальный Gemini TTS API готов.')
+      } else if (health.agent_browser === 'missing') {
         setError('Bridge запущен, но agent-browser не установлен. Выполните: npm i -g agent-browser; затем agent-browser install')
         setStatus('')
       } else if (health.busy) {
@@ -198,15 +216,23 @@ export function QuestionSpeechEditor({ event, question, onChanged }: {
       setValues(current => ({ ...current, voice_id: first.id }))
     }
   }
+  const providerTitle = bridgeProvider === 'windows_tts'
+    ? 'Локальная озвучка Windows · один вопрос'
+    : bridgeProvider === 'gemini_api'
+      ? 'Gemini TTS API · один вопрос'
+      : 'Озвучка · один вопрос'
+  const privacyNote = bridgeProvider === 'windows_tts'
+    ? 'Текст обрабатывается только на этом компьютере системным голосом Windows и никуда не передаётся.'
+    : 'При облачном режиме текст вопроса передаётся выбранному провайдеру озвучки.'
 
   return <section className="speech-editor">
-    <div className="speech-editor-heading"><div><span className="overline">Озвучка вопроса</span><h3>Google AI Studio · один вопрос</h3><p>Готовый файл сохраняется в квизе и повторно не генерируется.</p></div><Badge tone={speech?.active ? 'success' : 'neutral'}>{speech?.active ? 'Озвучка сохранена' : 'Без озвучки'}</Badge></div>
+    <div className="speech-editor-heading"><div><span className="overline">Озвучка вопроса</span><h3>{providerTitle}</h3><p>Готовый файл сохраняется в квизе и повторно не генерируется.</p></div><Badge tone={speech?.active ? 'success' : 'neutral'}>{speech?.active ? 'Озвучка сохранена' : 'Без озвучки'}</Badge></div>
     <label className="check-row compact speech-default-toggle"><input type="checkbox" checked={useEventDefaults} onChange={e => e.target.checked ? useQuizDefaults() : setUseEventDefaults(false)} /><span><b>Использовать настройки квиза</b><small>Снимите флажок, чтобы сохранить отдельный голос и стиль для этого вопроса.</small></span></label>
     <div className="speech-filter" role="group" aria-label="Фильтр голосов">{([['female', 'Женские'], ['male', 'Мужские'], ['all', 'Все']] as const).map(([value, label]) => <button type="button" key={value} className={voiceFilter === value ? 'active' : ''} onClick={() => changeFilter(value)}>{label}</button>)}</div>
     <div className="form-grid two"><Field label="Голос"><select value={values.voice_id} onChange={e => { setUseEventDefaults(false); setValues({ ...values, voice_id: e.target.value }) }}>{voices.map(voice => <option key={voice.id} value={voice.id}>{voice.label}</option>)}</select><small>{config?.voices.find(voice => voice.id === values.voice_id)?.description}</small><button type="button" className="text-button speech-voice-preview" disabled={!previewVersion} onClick={() => previewVersion && void new Audio(previewVersion.file_url).play()}><Play size={14} /> {previewVersion ? 'Тест голоса' : 'Тест после первой генерации'}</button></Field><Field label="Пресет"><select value={values.settings.preset} onChange={e => choosePreset(e.target.value)}>{Object.entries(config?.presets || {}).map(([id, preset]) => <option key={id} value={id}>{preset.label}</option>)}</select></Field></div>
     <div className="speech-sliders">{sliderLabels.map(item => <label key={item.key}><span>{item.label}</span><input type="range" min={item.min} max={item.max} step={item.key === 'pause_ms' ? 50 : 1} value={Number(values.settings[item.key])} onChange={e => setStyle({ preset: 'custom', [item.key]: Number(e.target.value) })} /><b>{Number(values.settings[item.key])}{item.suffix}</b></label>)}</div>
     <div className="speech-effects">{Object.entries(effectLabels).map(([effect, label]) => <label key={effect}><input type="checkbox" checked={values.settings.effects.includes(effect)} onChange={() => toggleEffect(effect)} /><span>{label}</span></label>)}</div>
-    <div className="speech-actions"><Button type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => void checkBridge()}>{busy === 'bridge' ? <LoaderCircle className="spin" /> : <Headphones />} Проверить bridge</Button><Button type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => void saveDefaults()}>{busy === 'defaults' ? <LoaderCircle className="spin" /> : <Save />} Для всего квиза</Button><Button type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => void saveQuestionDefaults()}>{busy === 'question-defaults' ? <LoaderCircle className="spin" /> : <Save />} Для этого вопроса</Button><Button type="button" disabled={Boolean(busy)} onClick={() => void generate(Boolean(speech?.active))}>{busy === 'generate' ? <LoaderCircle className="spin" /> : <Sparkles />} {speech?.active ? 'Переозвучить' : 'Озвучить через AI Studio'}</Button></div>
+    <div className="speech-actions"><Button type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => void checkBridge()}>{busy === 'bridge' ? <LoaderCircle className="spin" /> : <Headphones />} Проверить bridge</Button><Button type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => void saveDefaults()}>{busy === 'defaults' ? <LoaderCircle className="spin" /> : <Save />} Для всего квиза</Button><Button type="button" variant="secondary" disabled={Boolean(busy)} onClick={() => void saveQuestionDefaults()}>{busy === 'question-defaults' ? <LoaderCircle className="spin" /> : <Save />} Для этого вопроса</Button><Button type="button" disabled={Boolean(busy)} onClick={() => void generate(Boolean(speech?.active))}>{busy === 'generate' ? <LoaderCircle className="spin" /> : <Sparkles />} {speech?.active ? 'Переозвучить' : bridgeProvider === 'windows_tts' ? 'Озвучить локально' : 'Озвучить вопрос'}</Button></div>
     {speech?.stale && <p className="speech-warning">Текст или настройки изменились после озвучки. Сохранённый файл останется рабочим, но лучше переозвучить.</p>}
     <div className="speech-versions">
       {speech?.active && <div><span><Check /> Текущая озвучка · {speech.active.voice_id}</span><audio controls preload="metadata" src={speech.active.file_url} /></div>}
@@ -215,6 +241,6 @@ export function QuestionSpeechEditor({ event, question, onChanged }: {
     </div>
     {status && <p className="speech-status"><Play size={15} /> {status}</p>}
     {error && <p className="form-error">{error}</p>}
-    <small className="speech-privacy-note">Текст вопроса передаётся в Google AI Studio и может обрабатываться по условиям Google. Пароль и cookies Google остаются только в отдельном локальном Chrome profile.</small>
+    <small className="speech-privacy-note">{privacyNote}</small>
   </section>
 }

@@ -2,6 +2,7 @@ import { execFile, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { networkInterfaces } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
@@ -9,12 +10,15 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFile)
 const root = dirname(fileURLToPath(import.meta.url))
 const runner = join(root, 'ai-studio-runner.ps1')
+const windowsTtsRunner = join(root, 'windows-tts-runner.ps1')
 const host = '127.0.0.1'
 const port = Number(process.env.QUIZ_SPEECH_BRIDGE_PORT || 8766)
 const allowedVoices = new Set(['Kore', 'Aoede', 'Leda', 'Zephyr', 'Puck', 'Charon', 'Fenrir', 'Orus'])
 const allowedEffects = new Set(['quiz-host', 'warm-smile', 'suspense', 'dramatic-pause', 'emphasize', 'mysterious', 'final-question'])
 const explicitOrigins = new Set((process.env.QUIZ_APP_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean))
+const localLanOrigins = new Set(Object.values(networkInterfaces()).flat().filter(item => item?.family === 'IPv4' && !item.internal).map(item => `http://${item.address}:5173`))
 const geminiApiKey = (process.env.GEMINI_API_KEY || '').trim()
+const windowsTtsEnabled = process.platform === 'win32' && process.env.QUIZ_SPEECH_DISABLE_WINDOWS_TTS !== '1'
 let busy = false
 let currentStage = 'idle'
 const downloadsRoot = join(process.env.LOCALAPPDATA || join(root, 'state'), 'QuizApp', 'speech-downloads')
@@ -23,7 +27,7 @@ function originAllowed(value) {
   if (!value) return true
   try {
     const url = new URL(value)
-    return explicitOrigins.has(url.origin) || ['localhost', '127.0.0.1'].includes(url.hostname)
+    return explicitOrigins.has(url.origin) || ['localhost', '127.0.0.1'].includes(url.hostname) || localLanOrigins.has(url.origin)
   } catch { return false }
 }
 
@@ -157,6 +161,23 @@ async function runPowerShell(inputPath, outputPath) {
   })
 }
 
+async function runWindowsTts(inputPath, outputPath) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', windowsTtsRunner, '-InputPath', inputPath, '-OutputPath', outputPath], {
+      cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stderr = ''
+    child.stderr.on('data', chunk => { stderr += chunk.toString() })
+    const timer = setTimeout(() => { child.kill(); reject(new Error('Windows TTS did not respond within 60 seconds')) }, 60_000)
+    child.on('error', reject)
+    child.on('exit', code => {
+      clearTimeout(timer)
+      if (code === 0) resolvePromise()
+      else reject(new Error(stderr.trim() || `Windows TTS exited with code ${code}`))
+    })
+  })
+}
+
 function parseRunnerResult(content) {
   return JSON.parse(String(content).replace(/^\uFEFF/, ''))
 }
@@ -232,6 +253,11 @@ async function generateOne(payload) {
     if (geminiApiKey) {
       currentStage = 'gemini_api'
       audioPath = await generateWithGeminiApi(payload, join(taskDir, 'speech-download.wav'))
+    } else if (windowsTtsEnabled) {
+      await writeFile(inputPath, JSON.stringify({ ...payload, task_id: taskId, task_dir: taskDir }), 'utf8')
+      currentStage = 'windows_tts'
+      audioPath = join(taskDir, 'speech-download.wav')
+      await runWindowsTts(inputPath, audioPath)
     } else {
       await writeFile(inputPath, JSON.stringify({ ...payload, task_id: taskId, task_dir: taskDir }), 'utf8')
       currentStage = 'browser_automation'
@@ -279,9 +305,10 @@ const server = createServer(async (request, response) => {
   if (request.method === 'GET' && request.url === '/health') {
     const installed = await commandExists('agent-browser')
     return json(response, 200, {
-      status: geminiApiKey || installed ? 'ready' : 'setup_required',
-      provider: geminiApiKey ? 'gemini_api' : 'ai_studio_browser',
+      status: geminiApiKey || windowsTtsEnabled || installed ? 'ready' : 'setup_required',
+      provider: geminiApiKey ? 'gemini_api' : windowsTtsEnabled ? 'windows_tts' : 'ai_studio_browser',
       gemini_api: geminiApiKey ? 'configured' : 'missing_key',
+      windows_tts: windowsTtsEnabled ? 'enabled' : 'disabled',
       agent_browser: installed ? 'installed' : 'missing',
       chrome: await chromeStatus(),
       ai_studio: 'unknown',
@@ -291,7 +318,7 @@ const server = createServer(async (request, response) => {
   }
   if (request.method !== 'POST' || request.url !== '/generate-one') return json(response, 404, { error: 'not_found' }, origin)
   if (busy) return json(response, 409, { error: 'generation_busy', detail: 'Уже озвучивается другой вопрос' }, origin)
-  if (!geminiApiKey && !await commandExists('agent-browser')) return json(response, 503, {
+  if (!geminiApiKey && !windowsTtsEnabled && !await commandExists('agent-browser')) return json(response, 503, {
     error: 'agent_browser_missing',
     detail: 'Установите agent-browser: npm i -g agent-browser, затем agent-browser install',
   }, origin)

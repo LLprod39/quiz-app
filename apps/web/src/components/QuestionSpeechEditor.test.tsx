@@ -53,7 +53,8 @@ describe('QuestionSpeechEditor', () => {
     vi.mocked(api.questionSpeech).mockResolvedValue(speech)
     vi.mocked(api.updateQuestionSpeechDefaults).mockResolvedValue(speech)
     vi.mocked(checkLocalSpeechBridge).mockResolvedValue({
-      status: 'ready', agent_browser: 'installed', chrome: 'stopped', ai_studio: 'unknown', busy: false, stage: 'idle',
+      status: 'ready', provider: 'windows_tts', windows_tts: 'enabled', gemini_api: 'missing_key',
+      agent_browser: 'installed', chrome: 'stopped', ai_studio: 'unknown', busy: false, stage: 'idle',
     })
     vi.mocked(api.speechTicket).mockResolvedValue({
       status: 'ready', question_id: question.id, text: question.text, source_hash: 'a'.repeat(64),
@@ -79,7 +80,7 @@ describe('QuestionSpeechEditor', () => {
     expect(sliders[1]).toHaveValue('92')
     expect(screen.getByLabelText('Подача ведущего')).toBeChecked()
 
-    const generate = screen.getByRole('button', { name: /Озвучить через AI Studio/ })
+    const generate = screen.getByRole('button', { name: /Озвучить/ })
     fireEvent.click(generate)
     await waitFor(() => expect(runLocalSpeechBridge).toHaveBeenCalledTimes(1))
     expect(generate).toBeDisabled()
@@ -89,11 +90,11 @@ describe('QuestionSpeechEditor', () => {
     await waitFor(() => expect(onChanged).toHaveBeenCalled())
   })
 
-  it('checks the local bridge and explains lazy Chrome startup', async () => {
+  it('checks the local bridge and reports the offline Windows voice', async () => {
     render(<QuestionSpeechEditor event={event} question={question} onChanged={vi.fn()} />)
     await screen.findByLabelText('Голос')
     fireEvent.click(screen.getByRole('button', { name: 'Проверить bridge' }))
-    await screen.findByText('Bridge готов. Отдельный Chrome запустится автоматически при озвучивании.')
+    await screen.findByText('Локальный русский голос Windows готов. API key и Chrome не нужны.')
     expect(checkLocalSpeechBridge).toHaveBeenCalledWith('http://127.0.0.1:8766')
   })
 })

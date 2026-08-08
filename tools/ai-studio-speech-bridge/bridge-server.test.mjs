@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { buildPrompt, sniffAudio, uploadAllowed, validate } from './bridge-server.mjs'
+import { buildPrompt, parseRunnerResult, sniffAudio, uploadAllowed, validate } from './bridge-server.mjs'
 
 const settings = {
   preset: 'classic-host', pace: 50, energy: 70, pitch: 50,
@@ -45,4 +45,8 @@ test('validates ranges, effects, voices and audio magic bytes', () => {
   assert.throws(() => validate({ ...validPayload, settings: { ...settings, effects: ['shell-command'] } }), /эффекты/)
   assert.deepEqual(sniffAudio(Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WAVE')])), { mime: 'audio/wav', extension: '.wav' })
   assert.equal(sniffAudio(Buffer.from('not audio')), null)
+})
+
+test('accepts a PowerShell UTF-8 BOM in the runner result', () => {
+  assert.deepEqual(parseRunnerResult('\uFEFF{"status":"downloaded"}'), { status: 'downloaded' })
 })

@@ -156,6 +156,10 @@ async function runPowerShell(inputPath, outputPath) {
   })
 }
 
+function parseRunnerResult(content) {
+  return JSON.parse(String(content).replace(/^\uFEFF/, ''))
+}
+
 function sniffAudio(buffer) {
   if (buffer.length >= 12 && buffer.subarray(0, 4).toString() === 'RIFF' && buffer.subarray(8, 12).toString() === 'WAVE') return { mime: 'audio/wav', extension: '.wav' }
   if (buffer.subarray(0, 3).toString() === 'ID3' || (buffer.length >= 2 && buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0)) return { mime: 'audio/mpeg', extension: '.mp3' }
@@ -178,7 +182,7 @@ async function generateOne(payload) {
     currentStage = 'browser_automation'
     await runPowerShell(inputPath, outputPath)
     currentStage = 'validating_download'
-    const result = JSON.parse(await readFile(outputPath, 'utf8'))
+    const result = parseRunnerResult(await readFile(outputPath, 'utf8'))
     if (!result.downloaded_file) throw new Error(result.detail || 'Runner не вернул аудиофайл')
     const audioPath = resolve(result.downloaded_file)
     const inside = relative(resolve(taskDir), audioPath)
@@ -246,7 +250,7 @@ const server = createServer(async (request, response) => {
   }
 })
 
-export { buildPrompt, buildScene, nativePace, nativeStyle, originAllowed, server, sniffAudio, uploadAllowed, validate }
+export { buildPrompt, buildScene, nativePace, nativeStyle, originAllowed, parseRunnerResult, server, sniffAudio, uploadAllowed, validate }
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   server.listen(port, host, () => process.stdout.write(`Quiz speech bridge: http://${host}:${port}\n`))

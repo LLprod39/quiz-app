@@ -48,15 +48,15 @@ export function useQuestionSpeech({ sessionId, sessionCode, status, question }: 
   const audioSupported = typeof Audio !== 'undefined'
     && typeof URL !== 'undefined'
     && typeof URL.createObjectURL === 'function'
-  const supported = browserSupported || (audioSupported && Boolean(sessionCode))
+  const supported = browserSupported || (audioSupported && Boolean(question?.speech_audio_url || sessionCode))
   const [enabled, setEnabledState] = useState(savedPreference)
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([])
   const [speaking, setSpeaking] = useState(false)
-  const [provider, setProvider] = useState<'microsoft' | 'browser' | null>(null)
+  const [provider, setProvider] = useState<'stored' | 'microsoft' | 'browser' | null>(null)
   const [providerVoice, setProviderVoice] = useState<string | null>(null)
   const spokenQuestions = useRef(new Set<string>())
   const currentUtterance = useRef<SpeechSynthesisUtterance | null>(null)
-  const currentAudio = useRef<{ element: HTMLAudioElement; url: string } | null>(null)
+  const currentAudio = useRef<{ element: HTMLAudioElement; url: string; revoke: boolean } | null>(null)
   const currentRequest = useRef<AbortController | null>(null)
   const playbackAttempt = useRef(0)
   const activeKey = status === 'answering' && question ? `${sessionId || 'session'}:${question.id}` : null
@@ -79,7 +79,7 @@ export function useQuestionSpeech({ sessionId, sessionCode, status, question }: 
       currentAudio.current.element.onended = null
       currentAudio.current.element.onerror = null
       currentAudio.current.element.pause()
-      URL.revokeObjectURL(currentAudio.current.url)
+      if (currentAudio.current.revoke) URL.revokeObjectURL(currentAudio.current.url)
       currentAudio.current = null
     }
     currentUtterance.current = null
@@ -94,6 +94,30 @@ export function useQuestionSpeech({ sessionId, sessionCode, status, question }: 
     const attempt = playbackAttempt.current
     if (!repeat) spokenQuestions.current.add(activeKey)
 
+    if (audioSupported && question.speech_audio_url) {
+      const url = question.speech_audio_url
+      const audio = new Audio(url)
+      currentAudio.current = { element: audio, url, revoke: false }
+      const finish = () => {
+        if (currentAudio.current?.element === audio) {
+          currentAudio.current = null
+          setSpeaking(false)
+        }
+      }
+      audio.onended = finish
+      audio.onerror = finish
+      try {
+        await audio.play()
+        if (attempt !== playbackAttempt.current || currentAudio.current?.element !== audio) return false
+        setProvider('stored')
+        setProviderVoice(question.speech?.active?.voice_id || 'Сохранённая озвучка')
+        setSpeaking(true)
+        return true
+      } catch {
+        finish()
+      }
+    }
+
     if (audioSupported && sessionCode) {
       const controller = new AbortController()
       currentRequest.current = controller
@@ -104,7 +128,7 @@ export function useQuestionSpeech({ sessionId, sessionCode, status, question }: 
         if (result) {
           const url = URL.createObjectURL(result.audio)
           const audio = new Audio(url)
-          currentAudio.current = { element: audio, url }
+          currentAudio.current = { element: audio, url, revoke: true }
           const finish = () => {
             if (currentAudio.current?.element === audio) {
               URL.revokeObjectURL(url)

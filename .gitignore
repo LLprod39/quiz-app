@@ -14,6 +14,7 @@ test-results/
 artifacts/
 .playwright-cli/
 output/
+tools/ai-studio-speech-bridge/state/
 AGENTS.md
 progress.md
 sources/

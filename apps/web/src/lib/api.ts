@@ -1,4 +1,4 @@
-import type { EventData, Question, QuizPack, QuizPackDefinition, Snapshot, ThemeConfig } from '../types'
+import type { EventData, Question, QuestionSpeech, QuizPack, QuizPackDefinition, Snapshot, SpeechDefaults, SpeechStyleSettings, SpeechVersion, ThemeConfig } from '../types'
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
@@ -60,6 +60,77 @@ export async function fetchMicrosoftQuestionSpeech(code: string, questionId: str
   }
 }
 
+export interface SpeechMvpConfig {
+  bridge_url: string
+  prompt_version: number
+  voices: { id: string; label: string; presentation: 'female' | 'male'; description: string }[]
+  presets: Record<string, { label: string; voice_id?: string; pace?: number; energy?: number; pitch?: number; expression?: number; clarity?: number; pause_ms?: number; effects?: string[] }>
+  defaults: SpeechDefaults
+}
+
+export interface SpeechAutomationTicket {
+  status: 'ready' | 'already_ready'
+  question_id: string
+  active?: SpeechVersion
+  text?: string
+  source_hash?: string
+  voice_id?: string
+  voice_presentation?: 'female' | 'male'
+  settings?: SpeechStyleSettings
+  ticket?: string
+  upload_path?: string
+  expires_in_seconds?: number
+}
+
+export interface LocalSpeechBridgeHealth {
+  status: 'ready' | 'setup_required'
+  agent_browser: 'installed' | 'missing'
+  chrome: 'connected' | 'unavailable' | 'stopped'
+  ai_studio: 'authenticated' | 'login_required' | 'unknown'
+  busy: boolean
+  stage: 'idle' | 'validating' | 'preparing_task' | 'browser_automation' | 'validating_download' | 'uploading' | 'completed'
+}
+
+export async function checkLocalSpeechBridge(bridgeUrl: string): Promise<LocalSpeechBridgeHealth> {
+  const response = await fetch(`${bridgeUrl}/health`, { signal: AbortSignal.timeout(3000) })
+  const body = await response.json().catch(() => null) as LocalSpeechBridgeHealth | null
+  if (!response.ok || !body) throw new Error('Локальный помощник вернул некорректный статус')
+  return body
+}
+
+export async function runLocalSpeechBridge(
+  bridgeUrl: string,
+  ticket: SpeechAutomationTicket,
+  onProgress?: (health: LocalSpeechBridgeHealth) => void,
+) {
+  if (ticket.status !== 'ready' || !ticket.ticket || !ticket.upload_path) return { status: 'already_ready' }
+  const generation = fetch(`${bridgeUrl}/generate-one`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      question_id: ticket.question_id,
+      text: ticket.text,
+      source_hash: ticket.source_hash,
+      voice_id: ticket.voice_id,
+      voice_presentation: ticket.voice_presentation,
+      settings: ticket.settings,
+      upload_url: new URL(ticket.upload_path, window.location.origin).toString(),
+      ticket: ticket.ticket,
+    }),
+  })
+  const progressTimer = onProgress ? window.setInterval(() => {
+    void checkLocalSpeechBridge(bridgeUrl).then(onProgress).catch(() => undefined)
+  }, 700) : undefined
+  try {
+    const response = await generation
+    const body = await response.json().catch(() => ({ error: 'bridge_error', detail: 'Локальный помощник вернул некорректный ответ' }))
+    if (!response.ok) throw new Error(body.detail || body.error || 'Локальный помощник не выполнил озвучку')
+    return body
+  } finally {
+    if (progressTimer !== undefined) window.clearInterval(progressTimer)
+  }
+}
+
 async function request<T>(path: string, options: RequestInit = {}, admin = false): Promise<T> {
   const token = localStorage.getItem('admin_token')
   const headers = new Headers(options.headers)
@@ -92,6 +163,7 @@ export const api = {
   updateEvent: (id: string, data: Partial<EventData>) => request<EventData>(`/events/${id}`, { method: 'PUT', body: JSON.stringify(data) }, true),
   updateHostControl: (id: string, data: Pick<EventData, 'host_mode' | 'auto_advance_seconds'>) => request<EventData>(`/events/${id}/host-control`, { method: 'PUT', body: JSON.stringify(data) }, true),
   updateTvDisplay: (id: string, data: Pick<EventData, 'tv_display_mode' | 'tv_chart_style'>) => request<EventData>(`/events/${id}/tv-display`, { method: 'PUT', body: JSON.stringify(data) }, true),
+  updateSpeechDefaults: (id: string, data: SpeechDefaults) => request<SpeechDefaults>(`/events/${id}/speech-settings`, { method: 'PUT', body: JSON.stringify(data) }, true),
   archiveEvent: (id: string) => request<{ status: string; selected_event_id?: string | null }>(`/events/${id}/archive`, { method: 'POST' }, true),
   restoreEvent: (id: string) => request<EventData>(`/events/${id}/restore`, { method: 'POST' }, true),
   addQuestionnaireItem: (eventId: string, text: string) => request(`/events/${eventId}/questionnaire/items`, { method: 'POST', body: JSON.stringify({ text, type: 'text' }) }, true),
@@ -100,6 +172,13 @@ export const api = {
   submitQuestionnaire: (token: string, responses: Record<string, string>) => request(`/questionnaires/${token}/submit`, { method: 'POST', body: JSON.stringify({ responses }) }),
   createQuestion: (eventId: string, data: unknown) => request<Question>(`/events/${eventId}/questions`, { method: 'POST', body: JSON.stringify(data) }, true),
   updateQuestion: (id: string, data: unknown) => request<Question>(`/questions/${id}`, { method: 'PUT', body: JSON.stringify(data) }, true),
+  speechMvpConfig: () => request<SpeechMvpConfig>('/speech/mvp/config', {}, true),
+  questionSpeech: (id: string) => request<QuestionSpeech>(`/questions/${id}/speech`, {}, true),
+  updateQuestionSpeechDefaults: (id: string, data: SpeechDefaults & { use_event_defaults: boolean }) => request<QuestionSpeech>(`/questions/${id}/speech-settings`, { method: 'PUT', body: JSON.stringify(data) }, true),
+  speechTicket: (id: string, data: SpeechDefaults & { force?: boolean }) => request<SpeechAutomationTicket>(`/questions/${id}/speech/automation-ticket`, { method: 'POST', body: JSON.stringify(data) }, true),
+  activateSpeech: (questionId: string, versionId: string) => request<QuestionSpeech>(`/questions/${questionId}/speech/versions/${versionId}/activate`, { method: 'POST' }, true),
+  restoreSpeech: (questionId: string, versionId: string) => request<QuestionSpeech>(`/questions/${questionId}/speech/versions/${versionId}/restore`, { method: 'POST' }, true),
+  deleteSpeech: (questionId: string, versionId: string, confirmActive = false) => request<QuestionSpeech>(`/questions/${questionId}/speech/versions/${versionId}?confirm_active=${confirmActive}`, { method: 'DELETE' }, true),
   addQuestionPresets: (eventId: string) => request<EventData>(`/events/${eventId}/question-presets`, { method: 'POST' }, true),
   deleteQuestion: (id: string) => request(`/questions/${id}`, { method: 'DELETE' }, true),
   openSession: (eventId: string) => request<Snapshot>(`/events/${eventId}/sessions`, { method: 'POST' }, true),

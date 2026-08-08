@@ -146,6 +146,72 @@ describe('question speech', () => {
     expect(pause).toHaveBeenCalled()
   })
 
+  it('uses a saved question audio file before Microsoft and can replay it offline', async () => {
+    const play = vi.fn().mockResolvedValue(undefined)
+    const pause = vi.fn()
+    const sources: string[] = []
+    class MockAudio {
+      onended: (() => void) | null = null
+      onerror: (() => void) | null = null
+      play = play
+      pause = pause
+      constructor(source: string) { sources.push(source) }
+    }
+    const fetchMock = vi.fn()
+    vi.stubGlobal('Audio', MockAudio)
+    vi.stubGlobal('fetch', fetchMock)
+    const storedQuestion = { ...question('q-stored'), speech_audio_url: '/media/speech/event/question.wav' }
+    const { result, unmount } = renderHook(() => useQuestionSpeech({
+      sessionId: 'session-stored',
+      sessionCode: 'ABC123',
+      status: 'answering',
+      question: storedQuestion,
+    }))
+
+    act(() => result.current.setEnabled(true))
+    await waitFor(() => expect(result.current.provider).toBe('stored'))
+    expect(sources).toEqual(['/media/speech/event/question.wav'])
+    expect(fetchMock).not.toHaveBeenCalled()
+    act(() => result.current.repeat())
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2))
+    expect(fetchMock).not.toHaveBeenCalled()
+    unmount()
+    expect(pause).toHaveBeenCalled()
+  })
+
+  it('falls back to Microsoft when the saved file cannot be played', async () => {
+    const play = vi.fn()
+      .mockRejectedValueOnce(new Error('stored file missing'))
+      .mockResolvedValueOnce(undefined)
+    class MockAudio {
+      onended: (() => void) | null = null
+      onerror: (() => void) | null = null
+      play = play
+      pause = vi.fn()
+    }
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: vi.fn().mockResolvedValue(new Blob(['audio'])),
+      headers: new Headers({ 'X-Speech-Voice': 'ru-RU-SvetlanaNeural' }),
+    })
+    vi.stubGlobal('Audio', MockAudio)
+    vi.stubGlobal('fetch', fetchMock)
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:microsoft-fallback')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+    const { result } = renderHook(() => useQuestionSpeech({
+      sessionId: 'session-stored-fallback',
+      sessionCode: 'ABC123',
+      status: 'answering',
+      question: { ...question('q-stored-fallback'), speech_audio_url: '/media/missing.wav' },
+    }))
+
+    act(() => result.current.setEnabled(true))
+    await waitFor(() => expect(result.current.provider).toBe('microsoft'))
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(play).toHaveBeenCalledTimes(2)
+    expect(speak).not.toHaveBeenCalled()
+  })
+
   it('falls back to local Web Speech when Microsoft is not configured', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 503 }))
     vi.stubGlobal('fetch', fetchMock)

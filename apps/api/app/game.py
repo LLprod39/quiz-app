@@ -10,6 +10,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session, selectinload
 
 from .models import AnswerOption, Event, GameSession, Participant, Question, Submission, Team
+from .speech_mvp import active_speech_version
 
 
 ACTIVE_STATES = {"countdown", "answering", "locked", "review", "reveal", "between_questions", "paused"}
@@ -196,6 +197,7 @@ def public_question(question: Question | None, reveal: bool = False) -> dict | N
     options = list(question.options)
     if question.shuffle_options:
         options.sort(key=lambda option: hashlib.sha256(f"{question.id}:{option.id}".encode()).hexdigest())
+    speech = active_speech_version(question)
     data = {
         "id": question.id,
         "type": question.type,
@@ -204,6 +206,8 @@ def public_question(question: Question | None, reveal: bool = False) -> dict | N
         "explanation": question.explanation if reveal else "",
         "media_url": question.media_url,
         "media_type": question.media_type,
+        "speech_audio_url": speech.file_url if speech else None,
+        "speech_audio_type": speech.mime_type if speech else None,
         "round_title": question.round.title,
         "options": [{"id": option.id, "text": option.text} for option in options],
     }

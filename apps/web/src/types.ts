@@ -8,11 +8,28 @@ export interface SystemAccount extends Account { plan: Plan; quiz_count: number;
 export interface SystemDashboard { accounts: number; active_accounts: number; quizzes: number; active_rooms: number; active_devices: number }
 
 export interface Option { id: string; text: string; is_correct?: boolean; sort_order?: number }
+export interface SpeechStyleSettings {
+  preset: 'classic-host' | 'energetic-battle' | 'calm-family' | 'mystery-round' | 'final-question' | 'custom'
+  pace: number; energy: number; pitch: number; expression: number; clarity: number; pause_ms: number; effects: string[]
+}
+export interface SpeechDefaults { voice_id: string; settings: SpeechStyleSettings }
+export interface SpeechVersion {
+  id: string; question_id: string; version_number: number; status: 'active' | 'candidate' | 'previous' | 'discarded'
+  file_url: string; mime_type: string; source_text: string; source_hash: string
+  voice_id: string; voice_presentation: 'female' | 'male'; settings: SpeechStyleSettings
+  prompt_version: number; source: string; created_at: string | null; activated_at: string | null
+}
+export interface QuestionSpeech {
+  active: SpeechVersion | null; candidate: SpeechVersion | null; previous: SpeechVersion | null
+  versions: SpeechVersion[]; stale: boolean; uses_event_defaults: boolean; effective_settings: SpeechDefaults
+}
 export interface Question {
   id: string; round_id?: string; round_title: string; type: string; text: string
   time_limit_seconds: number; correct_answer?: unknown; accepted_answers?: string[]
   numeric_tolerance?: number | null; shuffle_options?: boolean; explanation?: string
   media_url?: string | null; media_type?: string | null; audio_replays?: number
+  speech?: QuestionSpeech; speech_audio_url?: string | null; speech_audio_type?: string | null
+  speech_settings_override?: SpeechDefaults | null
   sort_order?: number; options: Option[]
 }
 export interface Round { id: string; title: string; sort_order: number; questions: Question[] }
@@ -42,6 +59,7 @@ export interface EventData {
   created_at?: string | null; updated_at?: string | null
   game_mode: string; host_mode: 'auto' | 'manual'; auto_advance_seconds: number
   tv_display_mode: 'classic' | 'insights'; tv_chart_style: 'both' | 'pie' | 'bar'; theme: ThemeConfig
+  speech_settings?: SpeechDefaults
   hero_photo_url?: string | null; allow_late_join: boolean; question_count: number
   active_session_code?: string | null; latest_session_code?: string | null
   sessions: { id: string; join_code: string; status: string; participant_count: number; started_at?: string | null; finished_at?: string | null }[]

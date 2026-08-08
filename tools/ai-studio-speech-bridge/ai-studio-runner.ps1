@@ -368,7 +368,7 @@ try {
   Invoke-PointerRefClick -Ref $runRef
   $runAttempts = 1
   $retryAfter = $null
-  $ignoreErrorsUntil = (Get-Date).AddSeconds(3)
+  $ignoreForbiddenUntil = (Get-Date).AddSeconds(3)
 
   $downloadRef = $null
   $completedAudio = $null
@@ -385,7 +385,10 @@ try {
       Invoke-PointerRefClick -Ref $runRef
       $runAttempts++
       $retryAfter = $null
-      $ignoreErrorsUntil = (Get-Date).AddSeconds(3)
+      # AI Studio can keep the first 403 snackbar visible while the repeated
+      # request is already generating successfully. Give that second request
+      # enough time to replace the stale audio/error state.
+      $ignoreForbiddenUntil = (Get-Date).AddSeconds(90)
       $sawDisabledResult = $false
       $stableAudioSignature = $null
       $stableAudioChecks = 0
@@ -409,12 +412,12 @@ try {
     $audioState = Get-AudioState
     if ([string]$audioState.result.error) {
       if ([string]$audioState.result.error -match '(?i)status code:\s*403') {
-        if ((Get-Date) -lt $ignoreErrorsUntil) {
+        if ((Get-Date) -lt $ignoreForbiddenUntil) {
           Invoke-AgentBrowser -CommandArgs @('wait', '2000') | Out-Null
           continue
         }
         if ($runAttempts -lt 2 -and -not $retryAfter) {
-          $retryAfter = (Get-Date).AddSeconds(20)
+          $retryAfter = (Get-Date).AddSeconds(3)
           $downloadRef = $null
           Invoke-AgentBrowser -CommandArgs @('wait', '2000') | Out-Null
           continue

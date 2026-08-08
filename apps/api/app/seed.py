@@ -5,10 +5,11 @@ from .config import settings
 from .models import AnswerOption, Event, Question, Questionnaire, QuestionnaireItem, Round, uid
 
 
-def seed_demo(db: Session) -> None:
+def seed_demo(db: Session, owner_id: str) -> None:
     if db.scalar(select(Event)):
         return
     event = Event(
+        owner_id=owner_id,
         title="Вечер в честь Лены", event_format="celebration", topic="", hero_name="Лена", event_date="2026-08-08", status="draft", is_selected=True,
         theme={"accent": "#ff6b6b", "mode": "dark", "decor": "confetti"}, game_mode="individual",
     )

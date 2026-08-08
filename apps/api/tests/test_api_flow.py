@@ -19,9 +19,9 @@ def test_vertical_game_flow():
     if database.exists():
         database.unlink()
     with TestClient(app) as client:
-        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
+        login = client.post("/api/auth/login", json={"phone": "+77000000000", "password": "celebrate"})
         assert login.status_code == 200
-        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
 
         events = client.get("/api/events", headers=headers).json()
         assert events[0]["question_count"] == 3
@@ -97,8 +97,8 @@ def test_auto_host_mode_advances_and_manual_mode_stops_transition_deadlines():
     if database.exists():
         database.unlink()
     with TestClient(app) as client:
-        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
-        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        login = client.post("/api/auth/login", json={"phone": "+77000000000", "password": "celebrate"})
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
         event = client.get("/api/events", headers=headers).json()[0]
         assert event["host_mode"] == "auto"
         assert event["auto_advance_seconds"] == 5
@@ -146,8 +146,8 @@ def test_thematic_battle_has_no_hero_features():
     if database.exists():
         database.unlink()
     with TestClient(app) as client:
-        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
-        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        login = client.post("/api/auth/login", json={"phone": "+77000000000", "password": "celebrate"})
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
         seeded_event = client.get("/api/events", headers=headers).json()[0]
 
         created = client.post(
@@ -212,8 +212,8 @@ def test_quiz_pack_catalog_and_install():
         assert marvel["theme"]["brand_name"] == "Marvel Quiz Battle"
         assert len(marvel["sample_questions"]) == 5
 
-        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
-        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        login = client.post("/api/auth/login", json={"phone": "+77000000000", "password": "celebrate"})
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
         original = client.get("/api/events", headers=headers).json()[0]
         installed = client.post("/api/quiz-packs/marvel-universe/install", headers=headers, json={"replace_active": False})
         assert installed.status_code == 200
@@ -269,8 +269,8 @@ def test_custom_quiz_pack_prompt_crud_and_install():
     if database.exists():
         database.unlink()
     with TestClient(app) as client:
-        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
-        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        login = client.post("/api/auth/login", json={"phone": "+77000000000", "password": "celebrate"})
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
         seeded_event = client.get("/api/events", headers=headers).json()[0]
 
         prompt = client.post(
@@ -366,8 +366,8 @@ def test_public_branding_follows_active_event():
         assert defaults.json()["brand_name"] == "Quiz App"
         assert defaults.json()["landing_title"] == "Создайте квиз,"
 
-        login = client.post("/api/auth/login", json={"email": "organizer@example.local", "password": "celebrate"})
-        headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        login = client.post("/api/auth/login", json={"phone": "+77000000000", "password": "celebrate"})
+        headers = {"X-CSRF-Token": login.json()["csrf_token"]}
         event = client.get("/api/events", headers=headers).json()[0]
         updated = client.put(
             f"/api/events/{event['id']}",

@@ -51,9 +51,10 @@ function QuizPackDetail({ pack }: { pack: QuizPack }) {
   const [installing, setInstalling] = useState(false)
   const [installed, setInstalled] = useState(false)
   const [error, setError] = useState('')
-  const authenticated = Boolean(localStorage.getItem('admin_token'))
+  const [authenticated, setAuthenticated] = useState(false)
 
   useEffect(() => { document.title = pack.title }, [pack.title])
+  useEffect(() => { api.me().then(() => setAuthenticated(true)).catch(() => setAuthenticated(false)) }, [])
   const install = async () => {
     setInstalling(true); setError('')
     try {

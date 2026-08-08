@@ -1,5 +1,12 @@
 export type GameStatus = 'lobby' | 'countdown' | 'answering' | 'locked' | 'review' | 'reveal' | 'between_questions' | 'paused' | 'cancelled' | 'finished' | 'archived'
 
+export interface Account { id: string; phone: string; display_name: string; avatar: string; avatar_kind: 'preset' | 'upload'; role: 'user' | 'superadmin'; status: string; created_at: string; last_login_at?: string | null }
+export interface AccountSession { id: string; device_name: string; browser: string; os: string; ip_address: string; created_at: string; last_seen_at: string; expires_at: string; revoked_at?: string | null; is_current: boolean }
+export interface Plan { id: string; code: string; name: string; description: string; price_minor?: number | null; currency: string; is_public: boolean; is_active: boolean; sort_order: number; quotas: Record<string, number | null> }
+export interface PlanUsage { plan: Plan; subscription?: { id: string; status: string; current_period_end?: string | null } | null; usage: Record<string, { current: number; limit: number | null }> }
+export interface SystemAccount extends Account { plan: Plan; quiz_count: number; active_session_count: number }
+export interface SystemDashboard { accounts: number; active_accounts: number; quizzes: number; active_rooms: number; active_devices: number }
+
 export interface Option { id: string; text: string; is_correct?: boolean; sort_order?: number }
 export interface Question {
   id: string; round_id?: string; round_title: string; type: string; text: string
@@ -47,6 +54,7 @@ export interface LiveAnswer { id: string; name: string; avatar: string; answer: 
 export interface AnswerBreakdown { label: string; count: number; percent: number; color: string }
 export interface Snapshot {
   type: string; version: number; server_time: string
+  screen_url?: string
   session: { id: string; join_code: string; status: GameStatus; deployment_mode: string; current_question_index: number; question_count: number; deadline_at?: string | null; answered_count: number; answer_target_count: number }
   event: { id: string; title: string; event_format: 'celebration' | 'battle'; topic: string; hero_name: string; hero_photo_url?: string; game_mode: string; host_mode: 'auto' | 'manual'; auto_advance_seconds: number; tv_display_mode: 'classic' | 'insights'; tv_chart_style: 'both' | 'pie' | 'bar'; theme: ThemeConfig }
   question?: Question | null; participants: Participant[]; teams: Team[]; private_result?: Ranking | null; leaderboard: Ranking[]

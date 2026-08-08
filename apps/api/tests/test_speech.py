@@ -46,7 +46,9 @@ def test_microsoft_speech_requires_key_and_region():
 def test_endpoint_sends_only_current_question_text(monkeypatch):
     question = SimpleNamespace(id="question-1", text="Только текст вопроса", options=[SimpleNamespace(text="Секретный вариант")])
     session = SimpleNamespace(status="answering", current_question=question)
-    db = SimpleNamespace(scalar=lambda _: session)
+    access = SimpleNamespace(session_id="session-1")
+    rows = iter([access, session])
+    db = SimpleNamespace(scalar=lambda _: next(rows))
     received = []
 
     async def fake_synthesis(text: str):
@@ -66,7 +68,9 @@ def test_endpoint_sends_only_current_question_text(monkeypatch):
 def test_endpoint_rejects_a_question_that_is_not_on_screen(monkeypatch):
     question = SimpleNamespace(id="question-1", text="Текущий вопрос")
     session = SimpleNamespace(status="answering", current_question=question)
-    db = SimpleNamespace(scalar=lambda _: session)
+    access = SimpleNamespace(session_id="session-1")
+    rows = iter([access, session])
+    db = SimpleNamespace(scalar=lambda _: next(rows))
     monkeypatch.setattr(speech.settings, "azure_speech_key", "configured")
     monkeypatch.setattr(speech.settings, "azure_speech_region", "westeurope")
 

@@ -24,3 +24,5 @@ def test_event_control_migrations_round_trip(tmp_path, monkeypatch):
     assert "quiz_pack_templates" in sa.inspect(engine).get_table_names()
     template_columns = {column["name"] for column in sa.inspect(engine).get_columns("quiz_pack_templates")}
     assert template_columns >= {"id", "slug", "definition", "created_at", "updated_at"}
+    template_unique = sa.inspect(engine).get_unique_constraints("quiz_pack_templates")
+    assert any(constraint["column_names"] == ["owner_id", "slug"] for constraint in template_unique)

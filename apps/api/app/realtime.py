@@ -28,5 +28,14 @@ class ConnectionHub:
         for socket in stale:
             self.disconnect(room, socket)
 
+    async def close_room(self, room: str, code: int = 4401, reason: str = "Доступ отозван") -> None:
+        sockets = tuple(self.rooms.get(room, set()))
+        self.rooms.pop(room, None)
+        for socket in sockets:
+            try:
+                await socket.close(code=code, reason=reason)
+            except Exception:
+                pass
+
 
 hub = ConnectionHub()

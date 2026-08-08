@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, CheckCircle2, ChevronRight, Clock3, Crown, LoaderCircle, PartyPopper, RotateCw, Send, Trophy, WifiOff, XCircle } from 'lucide-react'
-import { Navigate, useParams } from '../lib/router'
+import { Link, Navigate, useParams } from '../lib/router'
 import { api } from '../lib/api'
 import { createId } from '../lib/id'
 import { useGameStore } from '../store/game'
@@ -33,7 +33,7 @@ export function GuestPage() {
       {eligible && status === 'reveal' && <PrivateResult snapshot={snapshot} />}
       {status === 'paused' && <Card className="state-card"><span className="state-icon">Ⅱ</span><Badge tone="warning">Пауза</Badge><h2>Небольшая остановка</h2><p>Таймер заморожен. Организатор скоро продолжит игру.</p></Card>}
       {status === 'cancelled' && <Card className="state-card"><span className="state-icon">↩</span><Badge tone="warning">Вопрос отменён</Badge><h2>Не считаем этот ответ</h2><p>Результат вопроса удалён. Ждём следующий.</p></Card>}
-      {status === 'finished' && <PersonalFinal snapshot={snapshot} />}
+      {status === 'finished' && <><PersonalFinal snapshot={snapshot} /><Card className="guest-account-invite"><Crown /><div><Badge tone="accent">Необязательно</Badge><h3>Сохранить результат?</h3><p>Создайте аккаунт по номеру телефона — мы предложим привязать все игры с этого устройства.</p></div><Link className="button button-secondary" to="/account?register=1">Сохранить мои игры</Link></Card></>}
     </section><footer className="guest-footer"><span>{snapshot.event.title}</span><span>·</span><span>{snapshot.session.current_question_index + 1}/{snapshot.session.question_count}</span></footer></main>
 }
 

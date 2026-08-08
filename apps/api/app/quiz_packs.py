@@ -43,7 +43,7 @@ QUIZ_PACKS = [
             "brand_name": "Marvel Quiz Battle", "brand_tagline": "герои · артефакты · мультивселенная", "logo_mark": "MV",
             "landing_eyebrow": "ГЕРОИ. АРТЕФАКТЫ. МУЛЬТИВСЕЛЕННАЯ.", "landing_title": "Marvel Quiz Battle", "landing_highlight": "собери свою команду",
             "landing_description": "20 вопросов о комиксах и киновселенной Marvel. Выберите сторону, подключайте телефоны и выясните, кто достоин поднять Мьёльнир.",
-            "organizer_link_label": "Панель ведущего", "join_code_label": "Код миссии", "join_button_label": "Войти в битву",
+            "organizer_link_label": "Управление", "join_code_label": "Код миссии", "join_button_label": "Войти в битву",
             "trust_no_registration": "Вход по коду", "trust_players": "Команды героев", "trust_offline": "Работает в локальной сети",
             "step_format": "Соберите команду", "step_join": "Войдите по коду", "step_show": "Спасите мультивселенную",
         },
